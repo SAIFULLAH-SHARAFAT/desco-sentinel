@@ -133,12 +133,11 @@ impl Monitor {
     /// Balance for one meter. A cached value younger than `max_age` is reused; the flag says
     /// whether the network was used.
     fn balance_inner(&self, meter: &Meter, max_age: Duration) -> (Result<Balance, ApiError>, bool) {
-        if !max_age.is_zero() {
-            if let Some((at, balance)) = lock(&self.balances).get(&meter.unit_name) {
-                if at.elapsed() <= max_age {
-                    return (Ok(balance.clone()), false);
-                }
-            }
+        if !max_age.is_zero()
+            && let Some((at, balance)) = lock(&self.balances).get(&meter.unit_name)
+            && at.elapsed() <= max_age
+        {
+            return (Ok(balance.clone()), false);
         }
         let Some((id, hint)) = self.identifier(meter) else {
             return (
@@ -165,10 +164,10 @@ impl Monitor {
 
     /// Customer info, cached for `info_cache_ttl` (it rarely changes).
     pub fn info(&self, meter: &Meter) -> Result<CustomerInfo, ApiError> {
-        if let Some((at, info)) = lock(&self.infos).get(&meter.unit_name) {
-            if at.elapsed() <= self.settings.info_cache_ttl {
-                return Ok(info.clone());
-            }
+        if let Some((at, info)) = lock(&self.infos).get(&meter.unit_name)
+            && at.elapsed() <= self.settings.info_cache_ttl
+        {
+            return Ok(info.clone());
         }
         let (id, hint) = self
             .identifier(meter)
@@ -262,10 +261,10 @@ impl Monitor {
     #[must_use]
     pub fn find_configured(&self, text: &str) -> Option<&Meter> {
         let text = text.trim();
-        if let Ok(last3) = Last3::parse(text) {
-            if let Some(m) = self.find_by_last3(&last3).first() {
-                return Some(m);
-            }
+        if let Ok(last3) = Last3::parse(text)
+            && let Some(m) = self.find_by_last3(&last3).first()
+        {
+            return Some(m);
         }
         if let Ok(id) = Identifier::parse(text) {
             let found = self.enabled().find(|m| {
@@ -351,10 +350,8 @@ impl Monitor {
             }
         }
 
-        if !dry_run {
-            if let Err(e) = state.save(&state_path) {
-                warn!(error = %e, "could not save alert state");
-            }
+        if !dry_run && let Err(e) = state.save(&state_path) {
+            warn!(error = %e, "could not save alert state");
         }
         report
     }

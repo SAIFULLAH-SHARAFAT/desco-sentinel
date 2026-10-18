@@ -94,10 +94,10 @@ fn status_reply(monitor: &Monitor) -> String {
 
 /// Account number when known, otherwise the meter number.
 fn display_number(monitor: &Monitor, meter: &Meter, balance: Option<&Balance>) -> String {
-    if let Some(b) = balance {
-        if !b.account_no.is_empty() {
-            return b.account_no.clone();
-        }
+    if let Some(b) = balance
+        && !b.account_no.is_empty()
+    {
+        return b.account_no.clone();
     }
     let known = monitor.known(meter);
     known

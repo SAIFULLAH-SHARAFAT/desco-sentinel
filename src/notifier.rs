@@ -274,10 +274,10 @@ impl Notifier {
         for to in defaults {
             self.send_alert_to(to, alert)?;
         }
-        if let Some(phone) = tenant {
-            if let Err(e) = self.send_alert_to(phone, alert) {
-                warn!(error = %e, "tenant notification failed");
-            }
+        if let Some(phone) = tenant
+            && let Err(e) = self.send_alert_to(phone, alert)
+        {
+            warn!(error = %e, "tenant notification failed");
         }
         Ok(())
     }
