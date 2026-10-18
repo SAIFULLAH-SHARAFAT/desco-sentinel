@@ -93,7 +93,7 @@ All variables are listed in [`config/settings.example.env`](config/settings.exam
 
 ## Telegram bot
 
-With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set, `desco-sentinel bot` answers Telegram messages. It uses long polling, so it needs no public URL and no webhook, only a machine that stays on and can reach api.telegram.org.
+Commands (send them to the bot in Telegram):
 
 | Send | You get |
 |---|---|
@@ -104,11 +104,33 @@ With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set, `desco-sentinel bot` answe
 | `/info` or `info` | directory of all meters |
 | `/help` | the command list |
 
-Only chats in `TELEGRAM_CHAT_ID` (or `TELEGRAM_ALLOWED_CHATS`, a comma-separated list) are answered. Anyone else is told their chat id so you can add them. The alert recipients and the people allowed to ask questions are the same list. `desco-sentinel serve` starts this bot too when `NOTIFY_PROVIDER=telegram`.
+Only chats listed in `TELEGRAM_CHAT_ID` (or `TELEGRAM_ALLOWED_CHATS`) are answered. Anyone else is told their chat id, so you can add them. The alert recipients and the people allowed to ask questions are the same list.
 
-On Windows, `scripts\windows-autostart.ps1` installs a scheduled task that starts the bot when you log in, restarts it 30 seconds after any exit, and logs to `%LOCALAPPDATA%\desco-sentinel\bot.log`. Run it again after rebuilding to update the installed copy, or with `-Uninstall` to remove it. The bot answers only while the PC is awake and you are logged in.
+### Running it without a server (GitHub + Cloudflare)
 
-Run only one bot process per token, otherwise Telegram rejects the second poller.
+A Telegram bot normally needs a program that stays running. To avoid hosting one, questions are handled event by event:
+
+```
+Telegram -> Cloudflare Worker (worker/) -> GitHub workflow telegram-reply -> Telegram
+```
+
+1. Telegram calls the Worker's webhook for every message. The Worker checks Telegram's secret header and the chat id, answers `/help` itself, and starts the `telegram-reply` workflow for everything else.
+2. The workflow downloads the prebuilt binary from the rolling `latest` release (published by `release-binary.yml`), runs `desco-sentinel reply --chat <id> --text <message>` and exits. Replies take about 30 seconds and cost about one Actions minute each.
+
+Setup:
+
+- **Worker.** Create a Cloudflare Worker named `desco-sentinel` connected to this repository (the root `wrangler.jsonc` points at `worker/src/index.js`). Add four **runtime** secrets (Settings, Runtime, Variables and secrets; not the ones under Builds, which only exist during the build): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (any long random string), `ALLOWED_CHATS` (comma-separated chat ids) and `GITHUB_TOKEN` (a fine-grained token for this repository with only "Actions: read and write"). If a secret is missing or malformed, the Worker answers authenticated calls with a 500 that names it.
+- **GitHub secrets.** `DESCO_METERS_JSON`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (same list as `ALLOWED_CHATS`), plus the variable `NOTIFY_PROVIDER=telegram`.
+- **Webhook.** Register it once, using the same secret as the Worker:
+  `curl "https://api.telegram.org/bot<TOKEN>/setWebhook" -d url=https://desco-sentinel.<account>.workers.dev -d secret_token=<TELEGRAM_WEBHOOK_SECRET> -d 'allowed_updates=["message"]'`
+- **Adding a person.** They press Start in the bot and send you the chat id it shows. Add it to `TELEGRAM_CHAT_ID` (GitHub secret) and `ALLOWED_CHATS` (Worker secret).
+- **Tokens expire.** When the GitHub token expires, the relay tells the user "Could not start the check". Create a new one and update the Worker secret.
+
+Notes: message text goes through environment variables, never into shell commands. The reply workflow logs only warnings, because run logs in a public repository would be public. Keep this repository private.
+
+### Running it on your own machine or server
+
+`desco-sentinel bot` answers Telegram messages by long polling, with no webhook and no public URL. Use it on any machine that stays on, in place of the Worker. While a webhook is registered Telegram refuses polling, so remove it first with `deleteWebhook`. `scripts/windows-autostart.ps1` installs it as a Windows logon task.
 
 ## Deployment
 
