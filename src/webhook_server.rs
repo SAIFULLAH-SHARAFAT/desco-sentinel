@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(parsed[0].sender, "8801700000000@c.us");
 
         let own = json!({ "event": "message", "payload": { "from": "x@c.us", "fromMe": true, "body": "status" } });
-        assert!(parse_incoming(&own).is_empty());
+        assert_eq!(parse_incoming(&own), Vec::new());
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn unknown_payload_yields_nothing() {
-        assert!(parse_incoming(&json!({ "hello": "world" })).is_empty());
+        assert_eq!(parse_incoming(&json!({ "hello": "world" })), Vec::new());
     }
 
     #[test]
