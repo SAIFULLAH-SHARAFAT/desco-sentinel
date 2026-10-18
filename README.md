@@ -63,6 +63,7 @@ For GitHub Actions, put the whole array in a secret named `DESCO_METERS_JSON`. I
 
 | Message | Reply |
 |---|---|
+| `low` | Only the meters below their alert level, lowest first |
 | `all`, `status`, `table`, `list`, `balance` | Table of every meter, each line at most 34 columns so it does not wrap on a phone |
 | `info`, `meters`, `directory` | Compact directory (customer names only for allow-listed senders) |
 | `421` (3 digits) | Card for every meter whose account **or** meter number ends in 421 |
@@ -91,6 +92,7 @@ With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set, `desco-sentinel bot` answe
 | Send | You get |
 |---|---|
 | `/status` or `status` | balance of every meter |
+| `/low` or `low` | only the meters below their alert level, lowest balance first |
 | `825` or `status 825` | details of the meter whose account or meter number ends in 825 |
 | `lift` | details by unit name (a part of the name is enough) |
 | `/info` or `info` | directory of all meters |
