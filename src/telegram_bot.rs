@@ -240,6 +240,6 @@ mod tests {
             ("TELEGRAM_ALLOWED_CHATS", "333"),
         ]);
         assert_eq!(allowed_chats(&env), vec!["333".to_string()]);
-        assert!(allowed_chats(&Env::default()).is_empty());
+        assert_eq!(allowed_chats(&Env::default()), Vec::<String>::new());
     }
 }
