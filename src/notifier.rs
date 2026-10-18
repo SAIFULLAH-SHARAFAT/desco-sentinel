@@ -305,6 +305,40 @@ impl Notifier {
         Ok(())
     }
 
+    /// Sends plain text (for example the weekly report) to the default recipients. Counts as
+    /// delivered when at least one of them received it.
+    pub fn send_broadcast(&self, text: &str) -> Result<(), NotifyError> {
+        if self.is_console() {
+            println!(
+                "{text}
+"
+            );
+            return Ok(());
+        }
+        let defaults = self.default_recipients();
+        if defaults.is_empty() {
+            return Err(NotifyError::NotConfigured(
+                "no recipient configured (RECIPIENT_PHONE / WA_CHAT_ID / TELEGRAM_CHAT_ID)"
+                    .to_string(),
+            ));
+        }
+        let mut delivered = 0;
+        let mut last_error = None;
+        for to in defaults {
+            match self.send_text(to, text) {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    warn!(error = %e, "message to a recipient failed");
+                    last_error = Some(e);
+                }
+            }
+        }
+        match (delivered, last_error) {
+            (0, Some(e)) => Err(e),
+            _ => Ok(()),
+        }
+    }
+
     fn send_alert_to(&self, to: &str, alert: &Alert) -> Result<(), NotifyError> {
         // Outside the 24h customer-service window Meta only accepts approved templates.
         if let Channel::Meta {

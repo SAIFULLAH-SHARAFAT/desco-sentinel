@@ -70,6 +70,12 @@ For GitHub Actions, put the whole array in a secret named `DESCO_METERS_JSON`. I
 | `1A`, `lift` | Card for the matching unit(s) |
 | `help`, anything else | Command menu |
 
+## Weekly report
+
+`desco-sentinel report` sends the list of meters below their alert level (the same as `low`) to the recipients, even when nothing is low, so a quiet week still shows the monitor is alive. `.github/workflows/weekly-report.yml` runs it every **Sunday at 11:30 AM Dhaka time** (`30 5 * * 0`, because GitHub schedules in UTC and Dhaka is UTC+6 all year). GitHub can start scheduled runs a few minutes late. The 6-hourly `monitor` workflow keeps sending instant alerts when a meter newly drops below its level; delete `monitor-cron.yml` or its `schedule:` block if you only want the weekly report.
+
+With Meta WhatsApp the weekly report is plain text, which Meta only delivers inside the 24-hour window; Telegram and WAHA / Green-API have no such limit.
+
 ## Notifications
 
 Select with `NOTIFY_PROVIDER`:

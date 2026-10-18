@@ -299,3 +299,17 @@ fn alert_fails_only_when_nobody_got_it() {
         "{err:?}"
     );
 }
+
+#[test]
+fn broadcast_reaches_all_recipients_and_tolerates_one_failure() {
+    let (base, seen) = start_mock(|n, _| if n == 0 { 400 } else { 200 });
+    two_recipient_notifier(&base)
+        .send_broadcast("weekly report")
+        .expect("one recipient is enough");
+    let seen = seen.lock().expect("lock");
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[1].body["text"]["body"], "weekly report");
+
+    let (base, _) = start_mock(|_, _| 500);
+    assert!(two_recipient_notifier(&base).send_broadcast("x").is_err());
+}

@@ -100,6 +100,19 @@ pub fn handle_incoming_query(text: &str, monitor: &Monitor, show_pii: bool) -> S
     }
 }
 
+/// Weekly report: the `low` list under a dated heading. Sent even when nothing is low, so a
+/// quiet week still shows that the monitor is alive.
+#[must_use]
+pub fn weekly_report(monitor: &Monitor) -> String {
+    let heading = clock::format_day(clock::dhaka_now());
+    format!(
+        "📅 *Weekly meter report — {heading}*
+
+{}",
+        status_reply(monitor, true)
+    )
+}
+
 fn status_reply(monitor: &Monitor, only_low: bool) -> String {
     let settings = monitor.settings();
     let readings = monitor.poll_all(settings.balance_cache_ttl, settings.on_demand_delay);

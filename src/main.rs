@@ -58,6 +58,12 @@ enum Command {
     Serve,
     /// Answer Telegram messages (`status`, `825`, `help`) until stopped; no public URL needed
     Bot,
+    /// Send the weekly low-balance report (meters below their alert level) to the recipients
+    Report {
+        /// Print the report instead of sending it
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Last 5 recharges and recent monthly consumption for a unit, last-3 digits or number
     History { identifier: String },
 }
@@ -131,6 +137,17 @@ fn run(cli: &Cli, env: &Env) -> Result<ExitCode> {
         Command::Serve => {
             let notifier = Arc::new(build_notifier(env, &monitor)?);
             webhook_server::serve(&Arc::new(monitor), &notifier, env)?;
+        }
+        Command::Report { dry_run } => {
+            let notifier = if *dry_run {
+                Notifier::console()
+            } else {
+                build_notifier(env, &monitor)?
+            };
+            let text = desco_sentinel::query_engine::weekly_report(&monitor);
+            notifier
+                .send_broadcast(&text)
+                .context("could not send the weekly report")?;
         }
         Command::Bot => {
             let notifier = Notifier::telegram(env, monitor.settings())

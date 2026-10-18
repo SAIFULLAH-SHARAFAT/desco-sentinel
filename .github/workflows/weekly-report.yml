@@ -1,0 +1,44 @@
+name: weekly-report
+
+on:
+  schedule:
+    # Sunday 11:30 AM in Dhaka (UTC+6, no daylight saving) = Sunday 05:30 UTC.
+    # GitHub may start scheduled runs a few minutes late.
+    - cron: "30 5 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the report instead of sending it"
+        type: boolean
+        default: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Send report
+        env:
+          DESCO_METERS_JSON: ${{ secrets.DESCO_METERS_JSON }}
+          NOTIFY_PROVIDER: ${{ vars.NOTIFY_PROVIDER || 'console' }}
+          DEFAULT_THRESHOLD_BDT: ${{ vars.DEFAULT_THRESHOLD_BDT || '150' }}
+          RATE_LIMIT_MS: ${{ vars.RATE_LIMIT_MS || '1000' }}
+          WA_PHONE_NUMBER_ID: ${{ secrets.WA_PHONE_NUMBER_ID }}
+          WA_ACCESS_TOKEN: ${{ secrets.WA_ACCESS_TOKEN }}
+          RECIPIENT_PHONE: ${{ secrets.RECIPIENT_PHONE }}
+          WA_WEBHOOK_URL: ${{ secrets.WA_WEBHOOK_URL }}
+          WA_WEBHOOK_TOKEN: ${{ secrets.WA_WEBHOOK_TOKEN }}
+          WA_CHAT_ID: ${{ secrets.WA_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ./target/release/desco-sentinel report --dry-run
+          else
+            ./target/release/desco-sentinel report
+          fi
