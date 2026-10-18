@@ -106,6 +106,8 @@ With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set, `desco-sentinel bot` answe
 
 Only chats in `TELEGRAM_CHAT_ID` (or `TELEGRAM_ALLOWED_CHATS`, a comma-separated list) are answered. Anyone else is told their chat id so you can add them. The alert recipients and the people allowed to ask questions are the same list. `desco-sentinel serve` starts this bot too when `NOTIFY_PROVIDER=telegram`.
 
+On Windows, `scripts\windows-autostart.ps1` installs a scheduled task that starts the bot when you log in, restarts it 30 seconds after any exit, and logs to `%LOCALAPPDATA%\desco-sentinelot.log`. Run it again after rebuilding to update the installed copy, or with `-Uninstall` to remove it. The bot answers only while the PC is awake and you are logged in.
+
 Run only one bot process per token, otherwise Telegram rejects the second poller.
 
 ## Deployment
