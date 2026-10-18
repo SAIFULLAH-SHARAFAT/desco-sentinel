@@ -1,0 +1,49 @@
+name: telegram-reply
+
+# Started by the Cloudflare relay whenever an approved chat messages the Telegram bot.
+# Answers that one message and exits. Not meant to be run by hand, but it can be:
+# Actions -> telegram-reply -> Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      chat_id:
+        description: "Telegram chat id to answer"
+        required: true
+        type: string
+      text:
+        description: "The message text"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Messages are answered one after another.
+concurrency:
+  group: telegram-reply
+  cancel-in-progress: false
+
+jobs:
+  reply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download the binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download latest --repo "$GITHUB_REPOSITORY" \
+            --pattern desco-sentinel-linux-x86_64 --output desco-sentinel
+          chmod +x desco-sentinel
+      - name: Answer
+        # Inputs go through environment variables, never into the script text.
+        env:
+          CHAT_ID: ${{ inputs.chat_id }}
+          TEXT: ${{ inputs.text }}
+          DESCO_METERS_JSON: ${{ secrets.DESCO_METERS_JSON }}
+          DEFAULT_THRESHOLD_BDT: ${{ vars.DEFAULT_THRESHOLD_BDT || '150' }}
+          ON_DEMAND_DELAY_MS: "200"
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: ./desco-sentinel reply --chat "$CHAT_ID" --text="$TEXT"

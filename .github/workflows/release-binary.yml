@@ -1,0 +1,39 @@
+name: release-binary
+
+# Publishes the Linux binary as the rolling "latest" release. The telegram-reply workflow
+# downloads it, so answering a message takes seconds instead of a full build.
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "Cargo.toml", "Cargo.lock"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-binary
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/release/desco-sentinel desco-sentinel-linux-x86_64
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest desco-sentinel-linux-x86_64 \
+            --target "$GITHUB_SHA" \
+            --title "latest" \
+            --notes "Rolling build of main ($GITHUB_SHA). Used by the telegram-reply workflow." \
+            --prerelease

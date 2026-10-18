@@ -176,20 +176,33 @@ pub fn run(monitor: &Monitor, notifier: &Notifier, env: &Env) -> Result<()> {
     }
 }
 
+/// The reply for one message: the answer for allowed chats, a "private bot" notice (with the
+/// chat id, so the owner can add it) for everyone else.
+#[must_use]
+pub fn compose_reply(monitor: &Monitor, allowed: &[String], chat_id: &str, text: &str) -> String {
+    if allowed.iter().any(|a| a == chat_id) {
+        info!(text = %text.chars().take(40).collect::<String>(), "telegram query");
+        handle_incoming_query(text, monitor, true)
+    } else {
+        warn!(chat = %chat_id, "message from a chat that is not allowed");
+        format!(
+            "⛔ This bot is private.\nYour chat id is `{chat_id}`. Send it to the owner to get access."
+        )
+    }
+}
+
+/// A Telegram chat id: digits, with a leading minus for groups.
+#[must_use]
+pub fn valid_chat_id(raw: &str) -> bool {
+    let digits = raw.strip_prefix('-').unwrap_or(raw);
+    !digits.is_empty() && digits.len() <= 20 && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn answer(monitor: &Monitor, notifier: &Notifier, allowed: &[String], message: &TgMessage) {
     if now_unix() - message.date > MAX_MESSAGE_AGE_SECS {
         return;
     }
-    let reply = if allowed.contains(&message.chat_id) {
-        info!(text = %message.text.chars().take(40).collect::<String>(), "telegram query");
-        handle_incoming_query(&message.text, monitor, true)
-    } else {
-        warn!(chat = %message.chat_id, "message from a chat that is not allowed");
-        format!(
-            "⛔ This bot is private.\nYour chat id is `{}`. Send it to the owner to get access.",
-            message.chat_id
-        )
-    };
+    let reply = compose_reply(monitor, allowed, &message.chat_id, &message.text);
     if let Err(e) = notifier.send_text(&message.chat_id, &reply) {
         warn!(error = %e, "could not send telegram reply");
     }
@@ -226,6 +239,24 @@ mod tests {
             parse_update(&update).map(|m| m.chat_id),
             Some("-1001234567890".to_string())
         );
+    }
+
+    #[test]
+    fn chat_ids_are_validated() {
+        for ok in ["123456789", "-1001234567890", "1"] {
+            assert!(valid_chat_id(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "-",
+            "12a",
+            "1 2",
+            "--1",
+            "1;rm",
+            "123456789012345678901",
+        ] {
+            assert!(!valid_chat_id(bad), "{bad}");
+        }
     }
 
     #[test]

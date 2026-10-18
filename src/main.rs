@@ -64,6 +64,15 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Answer one Telegram message and exit (used by the GitHub workflow behind the relay)
+    Reply {
+        /// Telegram chat id to answer
+        #[arg(long)]
+        chat: String,
+        /// The message text, as the user typed it
+        #[arg(long)]
+        text: String,
+    },
     /// Last 5 recharges and recent monthly consumption for a unit, last-3 digits or number
     History { identifier: String },
 }
@@ -148,6 +157,18 @@ fn run(cli: &Cli, env: &Env) -> Result<ExitCode> {
             notifier
                 .send_broadcast(&text)
                 .context("could not send the weekly report")?;
+        }
+        Command::Reply { chat, text } => {
+            if !desco_sentinel::telegram_bot::valid_chat_id(chat) {
+                bail!("'{chat}' is not a Telegram chat id");
+            }
+            let notifier = Notifier::telegram(env, monitor.settings())
+                .context("Telegram setup is incomplete (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")?;
+            let allowed = desco_sentinel::telegram_bot::allowed_chats(env);
+            let reply = desco_sentinel::telegram_bot::compose_reply(&monitor, &allowed, chat, text);
+            notifier
+                .send_text(chat, &reply)
+                .context("could not send the reply")?;
         }
         Command::Bot => {
             let notifier = Notifier::telegram(env, monitor.settings())

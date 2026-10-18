@@ -1,0 +1,12 @@
+{
+  // Telegram -> GitHub relay. The Worker's name must match the Worker created in Cloudflare.
+  "name": "desco-sentinel",
+  "main": "worker/src/index.js",
+  "compatibility_date": "2026-10-01",
+  // Keep variables and secrets set in the Cloudflare dashboard when this file is deployed.
+  "keep_vars": true,
+  "vars": {
+    "GITHUB_REPO": "SAIFULLAH-SHARAFAT/desco-sentinel",
+    "GITHUB_REF": "main"
+  }
+}
