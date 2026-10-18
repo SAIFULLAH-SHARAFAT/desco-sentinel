@@ -1,0 +1,69 @@
+name: monitor
+
+on:
+  schedule:
+    # Every 6 hours (UTC). Meters sync a few times a day, so this is plenty.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print alerts instead of sending them"
+        type: boolean
+        default: false
+
+# One run at a time: the alert state is restored from and saved to a cache.
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Runners are ephemeral, so the de-duplication state lives in the Actions cache.
+      # Each run saves under a fresh key and restores the newest previous one.
+      - name: Restore alert state
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: alert-state-${{ github.run_id }}
+          restore-keys: alert-state-
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Check meters
+        env:
+          DESCO_METERS_JSON: ${{ secrets.DESCO_METERS_JSON }}
+          NOTIFY_PROVIDER: ${{ vars.NOTIFY_PROVIDER || 'console' }}
+          NOTIFY_TENANTS: ${{ vars.NOTIFY_TENANTS || 'false' }}
+          DEFAULT_THRESHOLD_BDT: ${{ vars.DEFAULT_THRESHOLD_BDT || '150' }}
+          RATE_LIMIT_MS: ${{ vars.RATE_LIMIT_MS || '1000' }}
+          WA_PHONE_NUMBER_ID: ${{ secrets.WA_PHONE_NUMBER_ID }}
+          WA_ACCESS_TOKEN: ${{ secrets.WA_ACCESS_TOKEN }}
+          RECIPIENT_PHONE: ${{ secrets.RECIPIENT_PHONE }}
+          WA_TEMPLATE_NAME: ${{ vars.WA_TEMPLATE_NAME }}
+          WA_WEBHOOK_URL: ${{ secrets.WA_WEBHOOK_URL }}
+          WA_WEBHOOK_TOKEN: ${{ secrets.WA_WEBHOOK_TOKEN }}
+          WA_CHAT_ID: ${{ secrets.WA_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ./target/release/desco-sentinel check --dry-run
+          else
+            ./target/release/desco-sentinel check
+          fi
+
+      # Save even when the check exits non-zero, so alerts that did go out are remembered.
+      - name: Save alert state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: alert-state-${{ github.run_id }}
