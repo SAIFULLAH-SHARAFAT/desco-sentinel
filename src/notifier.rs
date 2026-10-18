@@ -271,8 +271,23 @@ impl Notifier {
                     .to_string(),
             ));
         }
+        // Recipients are tried in order (primary first). The alert counts as delivered when at
+        // least one of them got it; otherwise a retry would re-send to those who already did.
+        let mut delivered = 0;
+        let mut last_error = None;
         for to in defaults {
-            self.send_alert_to(to, alert)?;
+            match self.send_alert_to(to, alert) {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    warn!(error = %e, "alert delivery to a recipient failed");
+                    last_error = Some(e);
+                }
+            }
+        }
+        if delivered == 0
+            && let Some(e) = last_error
+        {
+            return Err(e);
         }
         if let Some(phone) = tenant
             && let Err(e) = self.send_alert_to(phone, alert)

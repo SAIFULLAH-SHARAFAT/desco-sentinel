@@ -245,3 +245,57 @@ fn errors_do_not_leak_the_bot_token() {
     let err = n.send_text("1", "x").expect_err("closed port");
     assert!(!err.to_string().contains("SECRET"), "{err}");
 }
+
+fn two_recipient_notifier(base: &str) -> Notifier {
+    notifier(&[
+        ("NOTIFY_PROVIDER", "whatsapp_meta"),
+        ("WA_PHONE_NUMBER_ID", "555"),
+        ("WA_ACCESS_TOKEN", "tok"),
+        ("RECIPIENT_PHONE", "8801700000001,8801700000002"),
+        ("WA_GRAPH_BASE", base),
+    ])
+}
+
+#[test]
+fn both_recipients_receive_the_alert_in_order() {
+    let (base, seen) = start_mock(|_, _| 200);
+    two_recipient_notifier(&base)
+        .send_alert(&sample_alert(), None)
+        .expect("sent");
+    let seen = seen.lock().expect("lock");
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].body["to"], "8801700000001", "primary first");
+    assert_eq!(seen[1].body["to"], "8801700000002");
+}
+
+#[test]
+fn alert_counts_as_delivered_if_only_one_recipient_gets_it() {
+    // Primary rejected, secondary accepted: success, so the next run will not re-send.
+    let (base, seen) = start_mock(|n, _| if n == 0 { 400 } else { 200 });
+    two_recipient_notifier(&base)
+        .send_alert(&sample_alert(), None)
+        .expect("secondary delivery is enough");
+    assert_eq!(
+        seen.lock().expect("lock").len(),
+        2,
+        "secondary still attempted"
+    );
+
+    // Primary accepted, secondary rejected: also success.
+    let (base, _) = start_mock(|n, _| if n == 0 { 200 } else { 400 });
+    two_recipient_notifier(&base)
+        .send_alert(&sample_alert(), None)
+        .expect("primary delivery is enough");
+}
+
+#[test]
+fn alert_fails_only_when_nobody_got_it() {
+    let (base, _) = start_mock(|_, _| 500);
+    let err = two_recipient_notifier(&base)
+        .send_alert(&sample_alert(), None)
+        .expect_err("all rejected");
+    assert!(
+        matches!(err, NotifyError::Rejected { status: 500, .. }),
+        "{err:?}"
+    );
+}

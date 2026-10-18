@@ -80,6 +80,8 @@ Select with `NOTIFY_PROVIDER`:
 - `telegram`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 - `console`: print to stdout (default).
 
+Several recipients can be listed, comma-separated (`RECIPIENT_PHONE=<primary>,<secondary>`). They are tried in order, primary first. An alert counts as delivered when at least one recipient received it, so a failure for one number does not cause duplicates to the other on the next run.
+
 All variables are listed in [`config/settings.example.env`](config/settings.example.env).
 
 ## Deployment
