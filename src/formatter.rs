@@ -125,6 +125,60 @@ pub fn whatsapp_status(rows: &[StatusRow], synced: &str) -> String {
     out
 }
 
+/// Only the meters below their alert level, lowest balance first. `rows` holds every meter,
+/// so the reply can say how many were checked and how many could not be read.
+#[must_use]
+pub fn whatsapp_low(rows: &[StatusRow], synced: &str) -> String {
+    let mut low: Vec<&StatusRow> = rows.iter().filter(|r| r.is_low()).collect();
+    low.sort_by(|a, b| {
+        a.balance
+            .partial_cmp(&b.balance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let unread = rows.iter().filter(|r| r.balance.is_none()).count();
+
+    let mut out = if low.is_empty() {
+        format!(
+            "{ICON_OK} *No meter is below its alert level* ({} checked)",
+            rows.len()
+        )
+    } else {
+        let mut text = format!(
+            "{ICON_LOW} *LOW BALANCE: {} of {} meters*\n{FENCE}\n",
+            low.len(),
+            rows.len()
+        );
+        text.push_str(&format!(
+            "{} {} {} {}\n",
+            pad_right("Unit", 9),
+            pad_right("Acc#", 5),
+            pad_left("Balance", 9),
+            pad_left("Alert", 5)
+        ));
+        for row in &low {
+            let balance = row
+                .balance
+                .map_or_else(|| "n/a".to_string(), |b| Bdt(b).to_string());
+            text.push_str(&format!(
+                "{} {} {} {}\n",
+                pad_right(&row.label, 9),
+                pad_right(&tail3(&row.number), 5),
+                pad_left(&balance, 9),
+                pad_left(&format!("{:.0}", row.threshold), 5)
+            ));
+        }
+        text.push_str(FENCE);
+        text
+    };
+    if unread > 0 {
+        out.push_str(&format!("\n{ICON_UNKNOWN} Could not read: {unread}"));
+    }
+    out.push_str(&format!(
+        "\n\n🕒 _Synced: {synced}_\n💡 _Send `status` for all meters or last 3 digits for details._"
+    ));
+    out
+}
+
 /// One row of the info directory.
 #[derive(Debug, Clone)]
 pub struct InfoRow {
@@ -296,6 +350,7 @@ pub fn help_text() -> String {
         "🤖 *DESCO Sentinel — commands*",
         "",
         "📊 `status` — balance of every meter (🔴 = below its alert level)",
+        "🔴 `low` — only the meters that are low (below their alert level, 150 BDT unless set otherwise)",
         "🔎 `825` — details of one meter: type the last 3 digits of its account or meter number",
         "🔎 `status 825` — same as above",
         "🏷 `lift` — details by unit name (part of the name is enough)",
@@ -509,5 +564,54 @@ mod tests {
         let table = ascii_table(&["A", "Bee"], &[vec!["xx".to_string(), "y".to_string()]]);
         let widths: Vec<usize> = table.lines().map(display_width).collect();
         assert!(widths.windows(2).all(|w| w[0] == w[1]));
+    }
+}
+
+#[cfg(test)]
+mod low_tests {
+    use super::*;
+
+    fn row(label: &str, balance: Option<f64>, threshold: f64) -> StatusRow {
+        StatusRow {
+            label: label.to_string(),
+            number: "98765421".to_string(),
+            balance,
+            threshold,
+        }
+    }
+
+    #[test]
+    fn low_lists_only_low_meters_lowest_first_within_phone_width() {
+        let rows = vec![
+            row("Fine", Some(400.0), 150.0),
+            row("Mid", Some(120.0), 150.0),
+            row("Worst", Some(21.52), 150.0),
+            row("Lift", Some(480.0), 500.0),
+            row("Broken", None, 150.0),
+        ];
+        let text = whatsapp_low(&rows, "2026-10-18 10:00");
+        assert!(text.contains("LOW BALANCE: 3 of 5 meters"));
+        assert!(!text.contains("Fine"));
+        assert!(
+            !text.contains("Broken  "),
+            "unreadable meters are counted, not listed"
+        );
+        assert!(text.contains("Could not read: 1"));
+        let worst = text.find("Worst").expect("worst listed");
+        let mid = text.find("Mid").expect("mid listed");
+        let lift = text
+            .find("Lift")
+            .expect("lift listed against its own 500 level");
+        assert!(worst < mid && mid < lift);
+        for line in text.split("```").nth(1).expect("fenced").lines() {
+            assert!(display_width(line) <= MAX_LINE_WIDTH, "too wide: '{line}'");
+        }
+    }
+
+    #[test]
+    fn low_with_nothing_low_says_so() {
+        let text = whatsapp_low(&[row("A", Some(900.0), 150.0)], "now");
+        assert!(text.contains("No meter is below its alert level"));
+        assert!(!text.contains("```"));
     }
 }

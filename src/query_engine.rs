@@ -5,7 +5,8 @@ use crate::config::Meter;
 use crate::desco_api::Balance;
 use crate::domain::Last3;
 use crate::formatter::{
-    CardData, InfoRow, StatusRow, help_text, whatsapp_card, whatsapp_info, whatsapp_status,
+    CardData, InfoRow, StatusRow, help_text, whatsapp_card, whatsapp_info, whatsapp_low,
+    whatsapp_status,
 };
 use crate::monitor::Monitor;
 
@@ -13,6 +14,8 @@ use crate::monitor::Monitor;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Query {
     Status,
+    /// Only meters below their alert level.
+    Low,
     Info,
     Help,
     Last3(Last3),
@@ -49,6 +52,7 @@ pub fn classify(text: &str) -> Query {
 fn classify_single(cleaned: &str) -> Query {
     match cleaned {
         "all" | "status" | "table" | "list" | "balance" | "balances" => Query::Status,
+        "low" | "lows" | "alert" | "alerts" => Query::Low,
         "info" | "meters" | "directory" => Query::Info,
         "" | "help" | "menu" | "hi" | "hello" | "?" | "start" => Query::Help,
         other => match Last3::parse(other) {
@@ -67,7 +71,8 @@ fn synced_now() -> String {
 pub fn handle_incoming_query(text: &str, monitor: &Monitor, show_pii: bool) -> String {
     match classify(text) {
         Query::Help => help_text(),
-        Query::Status => status_reply(monitor),
+        Query::Status => status_reply(monitor, false),
+        Query::Low => status_reply(monitor, true),
         Query::Info => info_reply(monitor, show_pii),
         Query::Last3(last3) => {
             let by_digits = monitor.find_by_last3(&last3);
@@ -95,7 +100,7 @@ pub fn handle_incoming_query(text: &str, monitor: &Monitor, show_pii: bool) -> S
     }
 }
 
-fn status_reply(monitor: &Monitor) -> String {
+fn status_reply(monitor: &Monitor, only_low: bool) -> String {
     let settings = monitor.settings();
     let readings = monitor.poll_all(settings.balance_cache_ttl, settings.on_demand_delay);
     let rows: Vec<StatusRow> = readings
@@ -107,7 +112,11 @@ fn status_reply(monitor: &Monitor) -> String {
             threshold: meter.threshold.0,
         })
         .collect();
-    whatsapp_status(&rows, &synced_now())
+    if only_low {
+        whatsapp_low(&rows, &synced_now())
+    } else {
+        whatsapp_status(&rows, &synced_now())
+    }
 }
 
 /// Account number when known, otherwise the meter number.
@@ -225,6 +234,9 @@ mod tests {
         assert!(matches!(classify("info 1A"), Query::Name(n) if n == "1a"));
         assert_eq!(classify("/status@desco_sentinel_bot"), Query::Status);
         assert_eq!(classify("/start"), Query::Help);
+        for word in ["low", "/low", "Low", "/low@desco_sentinel_bot", "alerts"] {
+            assert_eq!(classify(word), Query::Low, "{word}");
+        }
         // Four digits is not a last-3 lookup.
         assert!(matches!(classify("4211"), Query::Name(_)));
     }

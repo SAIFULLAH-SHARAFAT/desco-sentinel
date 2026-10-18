@@ -106,6 +106,7 @@ impl Api {
     fn publish_commands(&self) {
         let commands = json!({ "commands": [
             { "command": "status", "description": "Balance of every meter" },
+            { "command": "low", "description": "Only meters with low balance" },
             { "command": "info", "description": "Directory of all meters" },
             { "command": "help", "description": "How to use this bot" },
         ]});
