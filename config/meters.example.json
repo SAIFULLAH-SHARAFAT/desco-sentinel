@@ -1,0 +1,181 @@
+[
+  {
+    "unit_name": "Apt 1A",
+    "short_name": "Apt 1A",
+    "account_no": "98765401",
+    "meter_no": "667788990001",
+    "threshold_bdt": 150.0,
+    "notify_phone": "8801700000000",
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 1B",
+    "short_name": "Apt 1B",
+    "account_no": "98765402",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 2A",
+    "short_name": "Apt 2A",
+    "meter_no": "667788990003",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 2B",
+    "short_name": "Apt 2B",
+    "account_no": "98765404",
+    "meter_no": "667788990004",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 3A",
+    "short_name": "Apt 3A",
+    "account_no": "98765405",
+    "meter_no": "667788990005",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 3B",
+    "short_name": "Apt 3B",
+    "account_no": "98765406",
+    "meter_no": "667788990006",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 4A",
+    "short_name": "Apt 4A",
+    "account_no": "98765407",
+    "meter_no": "667788990007",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 4B",
+    "short_name": "Apt 4B",
+    "account_no": "98765408",
+    "meter_no": "667788990008",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 5A",
+    "short_name": "Apt 5A",
+    "account_no": "98765409",
+    "meter_no": "667788990009",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 5B",
+    "short_name": "Apt 5B",
+    "account_no": "98765410",
+    "meter_no": "667788990010",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 6A",
+    "short_name": "Apt 6A",
+    "account_no": "98765411",
+    "meter_no": "667788990011",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 6B",
+    "short_name": "Apt 6B",
+    "account_no": "98765412",
+    "meter_no": "667788990012",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 7A",
+    "short_name": "Apt 7A",
+    "account_no": "98765413",
+    "meter_no": "667788990013",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 7B",
+    "short_name": "Apt 7B",
+    "account_no": "98765414",
+    "meter_no": "667788990014",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 8A",
+    "short_name": "Apt 8A",
+    "account_no": "98765415",
+    "meter_no": "667788990015",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 8B",
+    "short_name": "Apt 8B",
+    "account_no": "98765416",
+    "meter_no": "667788990016",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 9A",
+    "short_name": "Apt 9A",
+    "account_no": "98765417",
+    "meter_no": "667788990017",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Apt 9B",
+    "short_name": "Apt 9B",
+    "account_no": "98765418",
+    "meter_no": "667788990018",
+    "threshold_bdt": 150.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Common - Lift & Pump",
+    "short_name": "Lift",
+    "account_no": "98765499",
+    "meter_no": "667788990099",
+    "threshold_bdt": 500.0,
+    "notify_phone": null,
+    "enabled": true
+  },
+  {
+    "unit_name": "Common - Water Pump",
+    "short_name": "Pump",
+    "account_no": "98765498",
+    "meter_no": "667788990098",
+    "threshold_bdt": 300.0,
+    "notify_phone": null,
+    "enabled": true,
+    "backend_hint": "tkdes"
+  }
+]
