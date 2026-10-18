@@ -62,6 +62,18 @@ export function safeEqual(a, b) {
   return diff === 0;
 }
 
+/** Names of settings that are missing or obviously wrong (never their values). */
+export function configProblems(env) {
+  const problems = [];
+  if (!/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(String(env.TELEGRAM_BOT_TOKEN || ""))) {
+    problems.push("TELEGRAM_BOT_TOKEN (must look like 123456789:AAxxxxxxxx...)");
+  }
+  if (!String(env.ALLOWED_CHATS || "").trim()) problems.push("ALLOWED_CHATS");
+  if (!String(env.GITHUB_TOKEN || "").trim()) problems.push("GITHUB_TOKEN");
+  if (!String(env.GITHUB_REPO || "").trim()) problems.push("GITHUB_REPO");
+  return problems;
+}
+
 async function telegram(env, method, body) {
   const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
     method: "POST",
@@ -107,9 +119,16 @@ export default {
       return new Response("desco-sentinel relay: ok\n");
     }
     // Telegram echoes the secret we gave it in setWebhook. Anything else is not Telegram.
+    if (!env.TELEGRAM_WEBHOOK_SECRET) {
+      return new Response("relay not configured: TELEGRAM_WEBHOOK_SECRET is missing", { status: 500 });
+    }
     const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-    if (!env.TELEGRAM_WEBHOOK_SECRET || !safeEqual(supplied, env.TELEGRAM_WEBHOOK_SECRET)) {
+    if (!safeEqual(supplied, env.TELEGRAM_WEBHOOK_SECRET)) {
       return new Response("unauthorized", { status: 401 });
+    }
+    const problems = configProblems(env);
+    if (problems.length > 0) {
+      return new Response(`relay not configured: ${problems.join(", ")}`, { status: 500 });
     }
 
     let update;

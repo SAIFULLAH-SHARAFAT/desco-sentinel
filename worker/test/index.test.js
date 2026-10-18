@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 
-import worker, { isAllowed, isHelp, parseUpdate, safeEqual } from "../src/index.js";
+import worker, { configProblems, isAllowed, isHelp, parseUpdate, safeEqual } from "../src/index.js";
 
 const env = {
-  TELEGRAM_BOT_TOKEN: "123:token",
+  TELEGRAM_BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   TELEGRAM_WEBHOOK_SECRET: "hook-secret",
   ALLOWED_CHATS: "111, -222",
   GITHUB_TOKEN: "ghp_test",
@@ -68,7 +68,26 @@ test("a request without the right secret is rejected and does nothing", async ()
 
 test("a missing server-side secret never lets anything through", async () => {
   const response = await worker.fetch(telegramUpdate(111, "status"), { ...env, TELEGRAM_WEBHOOK_SECRET: "" }, ctx);
-  assert.equal(response.status, 401);
+  assert.equal(response.status, 500);
+  assert.match(await response.text(), /TELEGRAM_WEBHOOK_SECRET is missing/);
+  assert.equal(calls.length, 0);
+});
+
+test("misconfiguration is reported by name, only after the caller is authenticated", async () => {
+  const badToken = { ...env, TELEGRAM_BOT_TOKEN: "8776351611" };
+  const response = await worker.fetch(telegramUpdate(111, "status"), badToken, ctx);
+  assert.equal(response.status, 500);
+  assert.match(await response.text(), /TELEGRAM_BOT_TOKEN/);
+  assert.equal(calls.length, 0);
+
+  const wrongSecret = new Request("https://relay.example/", {
+    method: "POST",
+    headers: { "X-Telegram-Bot-Api-Secret-Token": "nope" },
+    body: "{}",
+  });
+  const unauth = await worker.fetch(wrongSecret, badToken, ctx);
+  assert.equal(unauth.status, 401, "strangers learn nothing about the configuration");
+  assert.equal(await unauth.text(), "unauthorized");
 });
 
 test("an allowed chat starts the workflow with chat id and text", async () => {
@@ -142,6 +161,8 @@ test("long text is cut before it reaches the workflow", async () => {
 });
 
 test("helpers", () => {
+  assert.deepEqual(configProblems(env), []);
+  assert.equal(configProblems({ ...env, GITHUB_TOKEN: "" }).length, 1);
   assert.equal(parseUpdate({}), null);
   assert.equal(parseUpdate({ message: { text: "hi", chat: { id: 5 }, date: 3 } }).chatId, "5");
   assert.equal(isAllowed("111", "111,222"), true);
