@@ -2,7 +2,7 @@
 name = "desco-sentinel"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Multi-meter DESCO prepaid balance monitor with WhatsApp alerts and a two-way query bot"
 license-file = "LICENSE"
 publish = false
