@@ -53,8 +53,11 @@ enum Command {
         #[arg(required = true, num_args = 1..)]
         text: Vec<String>,
     },
-    /// Start the webhook server (two-way WhatsApp bot) with periodic checks
+    /// Start the webhook server (two-way WhatsApp bot) with periodic checks.
+    /// With NOTIFY_PROVIDER=telegram it also answers Telegram messages
     Serve,
+    /// Answer Telegram messages (`status`, `825`, `help`) until stopped; no public URL needed
+    Bot,
     /// Last 5 recharges and recent monthly consumption for a unit, last-3 digits or number
     History { identifier: String },
 }
@@ -128,6 +131,11 @@ fn run(cli: &Cli, env: &Env) -> Result<ExitCode> {
         Command::Serve => {
             let notifier = Arc::new(build_notifier(env, &monitor)?);
             webhook_server::serve(&Arc::new(monitor), &notifier, env)?;
+        }
+        Command::Bot => {
+            let notifier = Notifier::telegram(env, monitor.settings())
+                .context("Telegram setup is incomplete (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")?;
+            desco_sentinel::telegram_bot::run(&monitor, &notifier, env)?;
         }
         Command::History { identifier } => print_history(&monitor, identifier)?,
     }
@@ -314,7 +322,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let verbose = matches!(
         cli.command,
-        None | Some(Command::Serve | Command::Check { .. })
+        None | Some(Command::Serve | Command::Bot | Command::Check { .. })
     );
     init_logging(verbose);
     let env = Env::load();

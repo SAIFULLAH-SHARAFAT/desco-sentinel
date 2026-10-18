@@ -22,14 +22,32 @@ pub enum Query {
 /// Most unit-name matches shown as full cards; more than that gets a short list.
 const MAX_CARDS: usize = 4;
 
+/// Words that may precede a meter reference, as in `status 825` or `info lift`.
+const LOOKUP_PREFIXES: [&str; 8] = [
+    "status", "balance", "info", "check", "meter", "show", "details", "detail",
+];
+
 #[must_use]
 pub fn classify(text: &str) -> Query {
-    let cleaned = text
-        .trim()
-        .trim_start_matches(['/', '!', '.'])
-        .trim()
-        .to_lowercase();
-    match cleaned.as_str() {
+    let lowered = text.trim().to_lowercase();
+    let cleaned = lowered.trim_start_matches(['/', '!', '.']).trim();
+    // Telegram appends the bot name in groups: `/status@desco_sentinel_bot`.
+    let (first, rest) = match cleaned.split_once(char::is_whitespace) {
+        Some((first, rest)) => (first, rest.trim()),
+        None => (cleaned, ""),
+    };
+    let first = first.split('@').next().unwrap_or(first);
+    if !rest.is_empty() && LOOKUP_PREFIXES.contains(&first) {
+        return classify_single(rest);
+    }
+    if rest.is_empty() {
+        return classify_single(first);
+    }
+    classify_single(cleaned)
+}
+
+fn classify_single(cleaned: &str) -> Query {
+    match cleaned {
         "all" | "status" | "table" | "list" | "balance" | "balances" => Query::Status,
         "info" | "meters" | "directory" => Query::Info,
         "" | "help" | "menu" | "hi" | "hello" | "?" | "start" => Query::Help,
@@ -198,6 +216,15 @@ mod tests {
         assert!(matches!(classify("421"), Query::Last3(l) if l.as_str() == "421"));
         assert!(matches!(classify(" 011 "), Query::Last3(l) if l.as_str() == "011"));
         assert_eq!(classify("1A"), Query::Name("1a".to_string()));
+        // A command word may be followed by what to look up.
+        assert!(matches!(classify("status 825"), Query::Last3(l) if l.as_str() == "825"));
+        assert!(matches!(
+            classify("/status@desco_sentinel_bot 825"),
+            Query::Last3(_)
+        ));
+        assert!(matches!(classify("info 1A"), Query::Name(n) if n == "1a"));
+        assert_eq!(classify("/status@desco_sentinel_bot"), Query::Status);
+        assert_eq!(classify("/start"), Query::Help);
         // Four digits is not a last-3 lookup.
         assert!(matches!(classify("4211"), Query::Name(_)));
     }

@@ -139,6 +139,14 @@ impl Notifier {
         })
     }
 
+    /// Telegram notifier built from `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`, whatever
+    /// `NOTIFY_PROVIDER` says. Used by the Telegram bot, which always replies on Telegram.
+    pub fn telegram(env: &Env, settings: &Settings) -> Result<Self, NotifyError> {
+        let mut forced = settings.clone();
+        forced.provider = Provider::Telegram;
+        Self::from_env(env, &forced)
+    }
+
     /// Console-only notifier (used by `--dry-run` style flows and tests).
     #[must_use]
     pub fn console() -> Self {

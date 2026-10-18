@@ -10,4 +10,5 @@ pub mod monitor;
 pub mod notifier;
 pub mod query_engine;
 pub mod state;
+pub mod telegram_bot;
 pub mod webhook_server;

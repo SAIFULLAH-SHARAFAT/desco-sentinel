@@ -20,10 +20,11 @@ use sha2::Sha256;
 use tiny_http::{Header, Method, Request, Response, Server};
 use tracing::{info, warn};
 
-use crate::config::Env;
+use crate::config::{Env, Provider};
 use crate::monitor::Monitor;
 use crate::notifier::Notifier;
 use crate::query_engine::handle_incoming_query;
+use crate::telegram_bot;
 
 const QUEUE_SIZE: usize = 64;
 const MAX_BODY_BYTES: u64 = 1_000_000;
@@ -355,6 +356,18 @@ pub fn serve(monitor: &Arc<Monitor>, notifier: &Arc<Notifier>, env: &Env) -> Res
     let server = Server::http(("0.0.0.0", settings.port))
         .map_err(|e| anyhow!("cannot listen on port {}: {e}", settings.port))?;
     info!(port = settings.port, "webhook server listening");
+
+    if settings.provider == Provider::Telegram {
+        let (monitor, notifier) = (Arc::clone(monitor), Arc::clone(notifier));
+        let env = env.clone();
+        thread::Builder::new()
+            .name("telegram-bot".to_string())
+            .spawn(move || {
+                if let Err(e) = telegram_bot::run(&monitor, &notifier, &env) {
+                    warn!(error = %e, "telegram bot stopped");
+                }
+            })?;
+    }
 
     let (tx, rx) = mpsc::sync_channel::<Incoming>(QUEUE_SIZE);
     {

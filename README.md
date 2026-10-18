@@ -84,6 +84,22 @@ Several recipients can be listed, comma-separated (`RECIPIENT_PHONE=<primary>,<s
 
 All variables are listed in [`config/settings.example.env`](config/settings.example.env).
 
+## Telegram bot
+
+With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set, `desco-sentinel bot` answers Telegram messages. It uses long polling, so it needs no public URL and no webhook, only a machine that stays on and can reach api.telegram.org.
+
+| Send | You get |
+|---|---|
+| `/status` or `status` | balance of every meter |
+| `825` or `status 825` | details of the meter whose account or meter number ends in 825 |
+| `lift` | details by unit name (a part of the name is enough) |
+| `/info` or `info` | directory of all meters |
+| `/help` | the command list |
+
+Only chats in `TELEGRAM_CHAT_ID` (or `TELEGRAM_ALLOWED_CHATS`, a comma-separated list) are answered. Anyone else is told their chat id so you can add them. The alert recipients and the people allowed to ask questions are the same list. `desco-sentinel serve` starts this bot too when `NOTIFY_PROVIDER=telegram`.
+
+Run only one bot process per token, otherwise Telegram rejects the second poller.
+
 ## Deployment
 
 ### Scheduled alerts on GitHub Actions

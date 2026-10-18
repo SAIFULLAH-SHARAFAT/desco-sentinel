@@ -293,13 +293,16 @@ pub fn alert_message(
 #[must_use]
 pub fn help_text() -> String {
     [
-        "🤖 *DESCO Sentinel*",
-        "Send one of:",
-        "• `status` — all meters (balance table)",
-        "• `info` — meter directory",
-        "• `421` — last 3 digits of an account or meter number",
-        "• `1A` — a unit name",
-        "• `help` — this menu",
+        "🤖 *DESCO Sentinel — commands*",
+        "",
+        "📊 `status` — balance of every meter (🔴 = below its alert level)",
+        "🔎 `825` — details of one meter: type the last 3 digits of its account or meter number",
+        "🔎 `status 825` — same as above",
+        "🏷 `lift` — details by unit name (part of the name is enough)",
+        "📋 `info` — directory of all meters (account, meter, load)",
+        "❓ `help` — this message",
+        "",
+        "Low-balance alerts arrive here automatically. You do not need to ask for them.",
     ]
     .join("\n")
 }
