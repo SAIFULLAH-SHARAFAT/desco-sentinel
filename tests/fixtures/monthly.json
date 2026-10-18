@@ -1,0 +1,1 @@
+{"code":200,"desc":"OK","data":[{"accountNo":"98765421","meterNo":"667788990011","consumedTaka":1287.09,"consumedUnit":180.01,"maximumDemand":0.482,"month":"2026-07","APF":1.0},{"accountNo":"98765421","meterNo":"667788990011","consumedTaka":1225.54,"consumedUnit":172.77,"maximumDemand":0.0,"month":"2026-08","APF":1.0}]}

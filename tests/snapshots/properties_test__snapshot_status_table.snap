@@ -1,0 +1,18 @@
+---
+source: tests/properties_test.rs
+expression: "whatsapp_status(&rows, \"2026-10-18 00:00\")"
+---
+⚡ *DESCO BUILDING STATUS (5)* ⚡
+```
+Unit      Acc#    Balance St
+Apt 1A    ..421  1,384.35 🟢
+Apt 1B    ..812     95.50 🔴
+Apt 2A    ..309    450.00 🟢
+Lift      ..999    620.00 🟢
+Pump      ..998       n/a ⚪
+```
+🔴 Low balance: 1 of 5
+⚪ Could not read: 1
+
+🕒 _Synced: 2026-10-18 00:00_
+💡 _Reply with last 3 digits (e.g. 421) for full meter details._

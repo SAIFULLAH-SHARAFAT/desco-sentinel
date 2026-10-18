@@ -1,0 +1,13 @@
+---
+source: tests/properties_test.rs
+expression: alert.text
+---
+🔴 *LOW BALANCE — APT 1B*
+━━━━━━━━━━━━━━━━━━━━
+💰 *Balance:* *95.50 BDT* (alert below 150.00)
+📉 *Month Usage:* 2,020.49 BDT
+🕒 *Reading Time:* 2026-10-18
+• *Account:* `98765421`
+• *Meter:* `667788990011`
+
+⏳ Please recharge soon to avoid the relay cutting power.
