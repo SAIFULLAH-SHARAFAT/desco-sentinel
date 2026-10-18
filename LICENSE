@@ -1,0 +1,52 @@
+desco-sentinel Non-Commercial License
+Version 1.0
+
+Copyright (c) 2026 MD Shaifullah Sharafat. All rights reserved except as granted below.
+
+1. Grant of permission
+
+   Permission is granted, free of charge, to any person to use, copy and modify
+   this software and its documentation ("the Software") for Non-Commercial
+   Purposes, subject to the conditions in this license.
+
+2. Non-Commercial Purposes
+
+   "Non-Commercial Purposes" means personal use, study, research, and use to
+   monitor electricity meters of a property that you own, manage or live in, where
+   you do not charge anyone for the Software or for access to it.
+
+3. Commercial Use requires permission
+
+   Any other use is "Commercial Use" and is NOT permitted without the prior written
+   permission of the copyright holder, who may require payment. Commercial Use
+   includes, without limitation:
+
+   (a) selling, licensing, renting or sublicensing the Software or a derivative of it;
+   (b) offering the Software, or a service built on it, to third parties for a fee
+       or as part of a paid product or subscription;
+   (c) bundling the Software in, or using it to deliver, a paid product or service;
+   (d) use by a company or other organisation as part of providing paid services to
+       its customers, such as an energy-management or property-management business
+       billing clients for monitoring.
+
+   To request permission, contact the copyright holder through the project's
+   repository.
+
+4. Conditions
+
+   This license notice and the copyright notice must be included in all copies and
+   substantial portions of the Software. Modified versions must state that they
+   were changed. Permission under this license ends automatically if you breach it.
+
+5. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+   FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE
+   LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING LOSS OF POWER OR
+   MISSED ALERTS, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+6. Third parties
+
+   This project is not affiliated with or endorsed by Dhaka Electric Supply Company
+   Limited (DESCO). Use of DESCO's public endpoints is subject to DESCO's own terms.

@@ -1,0 +1,49 @@
+[package]
+name = "desco-sentinel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Multi-meter DESCO prepaid balance monitor with WhatsApp alerts and a two-way query bot"
+license-file = "LICENSE"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+doc_markdown = "allow"
+format_push_string = "allow"
+must_use_candidate = "allow"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+hmac = "0.13.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "query", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.0"
+thiserror = "2.0.21"
+time = { version = "0.3.45", features = ["formatting", "macros", "std"] }
+tiny_http = "0.12.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+insta = "1.49.0"
+proptest = "1.11.0"
