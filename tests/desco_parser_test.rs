@@ -105,7 +105,7 @@ fn monthly_is_newest_first_and_empty_lists_are_fine() {
 
     let empty = fixture("empty_list.json");
     let data = extract_data(&empty).expect("an empty list is still data");
-    assert!(parse_monthly(data).expect("list").is_empty());
+    assert_eq!(parse_monthly(data).expect("list"), Vec::new());
 }
 
 // ---- last-3-digit lookup ------------------------------------------------------------------
