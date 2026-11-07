@@ -41,3 +41,21 @@ fn empty_allow_list_answers_nobody() {
     let reply = compose_reply(&offline_monitor(), &[], "111", "help");
     assert!(reply.contains("private"));
 }
+
+#[test]
+fn status_and_low_say_so_when_nothing_can_be_read() {
+    // The offline monitor points at a closed port, so every meter is unreadable.
+    let monitor = offline_monitor();
+    for command in ["status", "low"] {
+        let reply = compose_reply(&monitor, &["111".to_string()], "111", command);
+        assert!(
+            reply.contains("Cannot read the meters right now"),
+            "{command}: {reply}"
+        );
+        assert!(
+            !reply.contains("Low balance: 0"),
+            "must not look like good news: {reply}"
+        );
+        assert!(!reply.contains("🟢"), "{reply}");
+    }
+}

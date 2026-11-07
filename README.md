@@ -158,6 +158,16 @@ Point the provider's webhook at `https://<your-host>/webhook`:
 
 **Set `ALLOWED_SENDERS`** (comma-separated phone numbers). Without it anyone who finds the bot can read balances, and customer names and phone numbers are hidden from replies. DESCO's API exposes names, addresses and phones for any account number, so this tool avoids putting them into group alerts and only shows them to allow-listed senders.
 
+## When DESCO cannot be read
+
+If a check cannot read **any** meter, nobody can be warned about low balances, so the tool says so instead of showing a misleading table:
+
+- `status` and `low` reply "Cannot read the meters right now" with the reason.
+- The scheduled check sends one message to the alert recipients when readings stop, and one when they return. It does not repeat while the problem lasts.
+- In the Actions log the cause is the `error=` text, for example `HTTP 401 from DESCO`.
+
+Since 6 November 2026 DESCO's portal answers `401 AUTHENTICATION_REQUIRED` to the public endpoints this tool used, because it introduced customer sign-in (login, one-time codes sent to the account holder's mobile). Until DESCO offers an official way to read several accounts, or the tool is adapted to it, balances cannot be read automatically.
+
 ## How alerts work
 
 For every enabled meter on each check:

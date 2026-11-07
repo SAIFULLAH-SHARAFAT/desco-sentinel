@@ -26,10 +26,26 @@ pub enum ApiError {
     Network(String),
     #[error("HTTP {0} from DESCO")]
     Http(u16),
+    #[error("DESCO requires sign-in (HTTP {0})")]
+    AuthRequired(u16),
     #[error("unexpected response: {0}")]
     Malformed(String),
     #[error("meter not found on any backend: {desc} (code {code})")]
     NotFound { code: i64, desc: String },
+}
+
+impl ApiError {
+    /// One plain sentence for people, used in chat messages.
+    #[must_use]
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::AuthRequired(_) => "DESCO's customer portal now asks for a sign-in, so balances cannot be read automatically any more.".to_string(),
+            Self::Network(_) => "DESCO's server could not be reached.".to_string(),
+            Self::Http(code) => format!("DESCO's server answered with an error (HTTP {code})."),
+            Self::Malformed(_) => "DESCO's answer was not in the expected format.".to_string(),
+            Self::NotFound { .. } => "DESCO does not know these meter numbers.".to_string(),
+        }
+    }
 }
 
 /// A successful answer plus the backend that produced it.
@@ -262,6 +278,11 @@ impl DescoClient {
         let status = response.status();
         if status.is_server_error() {
             return Err(Attempt::Retry(ApiError::Http(status.as_u16())));
+        }
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            // Since Nov 2026 the portal answers "AUTHENTICATION_REQUIRED". Retrying or trying
+            // the other backend cannot help.
+            return Err(Attempt::Fatal(ApiError::AuthRequired(status.as_u16())));
         }
         if !status.is_success() {
             return Err(Attempt::Fatal(ApiError::Http(status.as_u16())));

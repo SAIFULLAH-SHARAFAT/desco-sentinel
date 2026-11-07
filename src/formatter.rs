@@ -111,7 +111,14 @@ pub fn whatsapp_status(rows: &[StatusRow], synced: &str) -> String {
     }
     out.push_str(FENCE);
     out.push('\n');
-    let summary_icon = if low > 0 { ICON_LOW } else { ICON_OK };
+    // Green only when every meter was read and none is low.
+    let summary_icon = if low > 0 {
+        ICON_LOW
+    } else if unread > 0 {
+        ICON_UNKNOWN
+    } else {
+        ICON_OK
+    };
     out.push_str(&format!(
         "{summary_icon} Low balance: {low} of {}",
         rows.len()
@@ -138,10 +145,18 @@ pub fn whatsapp_low(rows: &[StatusRow], synced: &str) -> String {
     let unread = rows.iter().filter(|r| r.balance.is_none()).count();
 
     let mut out = if low.is_empty() {
-        format!(
-            "{ICON_OK} *No meter is below its alert level* ({} checked)",
-            rows.len()
-        )
+        if unread > 0 {
+            format!(
+                "{ICON_UNKNOWN} *No low meter among the {} that could be read* ({unread} of {} unreadable)",
+                rows.len() - unread,
+                rows.len()
+            )
+        } else {
+            format!(
+                "{ICON_OK} *No meter is below its alert level* ({} checked)",
+                rows.len()
+            )
+        }
     } else {
         let mut text = format!(
             "{ICON_LOW} *LOW BALANCE: {} of {} meters*\n{FENCE}\n",
@@ -177,6 +192,39 @@ pub fn whatsapp_low(rows: &[StatusRow], synced: &str) -> String {
         "\n\n🕒 _Synced: {synced}_\n💡 _Send `status` for all meters or last 3 digits for details._"
     ));
     out
+}
+
+/// Reply to `status` / `low` when not a single meter could be read, so nobody mistakes
+/// "unknown" for "all fine".
+#[must_use]
+pub fn unreadable_message(reason: &str, synced: &str) -> String {
+    let mut out = format!("{ICON_UNKNOWN} *Cannot read the meters right now*");
+    if !reason.is_empty() {
+        out.push_str(&format!("\n\n{reason}"));
+    }
+    out.push_str(&format!(
+        "\n\nBalances are unknown, so low-balance alerts are paused until this is fixed. Please check the meters another way for now.\n\n🕒 _Checked: {synced}_"
+    ));
+    out
+}
+
+/// Sent once when a scheduled check could not read any meter.
+#[must_use]
+pub fn outage_notice(reason: &str) -> String {
+    let mut out = format!("{ICON_LOW} *DESCO monitoring cannot read the meters*");
+    if !reason.is_empty() {
+        out.push_str(&format!("\n\n{reason}"));
+    }
+    out.push_str(
+        "\n\nNo low-balance alerts can be sent until readings work again. Please check the meters another way for now. You will get one message when readings are back.",
+    );
+    out
+}
+
+/// Sent once when readings work again after an outage notice.
+#[must_use]
+pub fn recovery_notice() -> String {
+    format!("{ICON_OK} *Meter readings are back.* Low-balance alerts are active again.")
 }
 
 /// One row of the info directory.
@@ -613,5 +661,46 @@ mod low_tests {
         let text = whatsapp_low(&[row("A", Some(900.0), 150.0)], "now");
         assert!(text.contains("No meter is below its alert level"));
         assert!(!text.contains("```"));
+    }
+}
+
+#[cfg(test)]
+mod unreadable_tests {
+    use super::*;
+
+    fn row(label: &str, balance: Option<f64>) -> StatusRow {
+        StatusRow {
+            label: label.to_string(),
+            number: "98765421".to_string(),
+            balance,
+            threshold: 150.0,
+        }
+    }
+
+    #[test]
+    fn summary_is_never_green_when_meters_could_not_be_read() {
+        let all_unread = whatsapp_status(&[row("A", None), row("B", None)], "now");
+        assert!(!all_unread.contains("🟢 Low balance"), "{all_unread}");
+        assert!(all_unread.contains("Could not read: 2"));
+        let healthy = whatsapp_status(&[row("A", Some(500.0))], "now");
+        assert!(healthy.contains("🟢 Low balance: 0 of 1"));
+    }
+
+    #[test]
+    fn low_does_not_claim_all_clear_when_some_meters_are_unreadable() {
+        let text = whatsapp_low(&[row("A", Some(500.0)), row("B", None)], "now");
+        assert!(
+            !text.contains("No meter is below its alert level"),
+            "{text}"
+        );
+        assert!(text.contains("1 of 2 unreadable"));
+    }
+
+    #[test]
+    fn notices_carry_the_reason() {
+        let reason = "DESCO now asks for a sign-in.";
+        assert!(outage_notice(reason).contains(reason));
+        assert!(unreadable_message(reason, "2026-11-07 10:00").contains(reason));
+        assert!(recovery_notice().contains("back"));
     }
 }

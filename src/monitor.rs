@@ -12,7 +12,7 @@ use crate::clock;
 use crate::config::{Meter, Settings};
 use crate::desco_api::{ApiError, Balance, CustomerInfo, DescoClient};
 use crate::domain::{AccountNo, Backend, Identifier, Last3, MeterNo};
-use crate::formatter::alert_message;
+use crate::formatter::{alert_message, outage_notice, recovery_notice};
 use crate::notifier::Notifier;
 use crate::state::{
     AlertState, Decision, Identity, IdentityCache, alert_state_path, identity_cache_path,
@@ -48,6 +48,8 @@ pub struct CheckReport {
     pub notify_failures: usize,
     /// Alert texts that would be (dry run) or were sent.
     pub messages: Vec<String>,
+    /// Every enabled meter was unreadable in this run.
+    pub outage: bool,
 }
 
 impl Monitor {
@@ -288,6 +290,7 @@ impl Monitor {
         let mut state = AlertState::load(&state_path);
         let mut report = CheckReport::default();
         let now = clock::format_minute(clock::dhaka_now());
+        let mut first_error: Option<ApiError> = None;
 
         for (meter, result) in self.poll_all(Duration::ZERO, self.settings.rate_limit) {
             report.checked += 1;
@@ -296,6 +299,7 @@ impl Monitor {
                 Err(e) => {
                     warn!(unit = %meter.unit_name, error = %e, "could not read meter");
                     report.unreadable += 1;
+                    first_error.get_or_insert(e);
                     continue;
                 }
             };
@@ -350,10 +354,66 @@ impl Monitor {
             }
         }
 
+        Self::report_outage(
+            notifier,
+            dry_run,
+            &mut state,
+            &mut report,
+            first_error.as_ref(),
+            &now,
+        );
+
         if !dry_run && let Err(e) = state.save(&state_path) {
             warn!(error = %e, "could not save alert state");
         }
         report
+    }
+
+    /// Tells the recipients once when no meter can be read at all, and once when readings are
+    /// back. A single unreadable meter is not an outage. The notice is remembered only after it
+    /// was delivered, so a failed delivery is retried on the next run.
+    fn report_outage(
+        notifier: &Notifier,
+        dry_run: bool,
+        state: &mut AlertState,
+        report: &mut CheckReport,
+        first_error: Option<&ApiError>,
+        now: &str,
+    ) {
+        report.outage = report.checked > 0 && report.unreadable == report.checked;
+        let text = if report.outage {
+            if state.outage_since().is_some() {
+                return;
+            }
+            let reason = first_error.map_or_else(String::new, ApiError::user_message);
+            outage_notice(&reason)
+        } else if report.checked > 0 && state.outage_since().is_some() {
+            recovery_notice()
+        } else {
+            return;
+        };
+
+        report.messages.push(text.clone());
+        if dry_run {
+            println!(
+                "{text}
+"
+            );
+            return;
+        }
+        match notifier.send_broadcast(&text) {
+            Ok(()) => {
+                if report.outage {
+                    state.set_outage(now);
+                } else {
+                    state.clear_outage();
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "could not deliver the outage notice");
+                report.notify_failures += 1;
+            }
+        }
     }
 
     /// Phone of the tenant to notify directly: the configured `notify_phone`, or the contact

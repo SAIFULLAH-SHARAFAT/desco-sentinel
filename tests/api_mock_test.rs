@@ -181,3 +181,22 @@ fn non_json_body_is_malformed_not_a_panic() {
         .expect_err("not json");
     assert!(matches!(err, ApiError::Malformed(_)), "{err:?}");
 }
+
+#[test]
+fn sign_in_required_is_reported_clearly_and_not_retried_on_the_other_backend() {
+    let (base, seen) = start_mock(Box::new(|_, _| {
+        (
+            401,
+            r#"{"errorCode":"AUTHENTICATION_REQUIRED","message":"Please sign in to continue."}"#
+                .to_string(),
+        )
+    }));
+    let err = client(&base, 2).balance(&account(), None).expect_err("401");
+    assert!(matches!(err, ApiError::AuthRequired(401)), "{err:?}");
+    assert!(err.user_message().contains("sign-in"));
+    assert_eq!(
+        seen.lock().expect("lock").len(),
+        1,
+        "no retries and no tkdes fallback for an authentication failure"
+    );
+}

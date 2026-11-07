@@ -5,8 +5,8 @@ use crate::config::Meter;
 use crate::desco_api::Balance;
 use crate::domain::Last3;
 use crate::formatter::{
-    CardData, InfoRow, StatusRow, help_text, whatsapp_card, whatsapp_info, whatsapp_low,
-    whatsapp_status,
+    CardData, InfoRow, StatusRow, help_text, unreadable_message, whatsapp_card, whatsapp_info,
+    whatsapp_low, whatsapp_status,
 };
 use crate::monitor::Monitor;
 
@@ -116,6 +116,12 @@ pub fn weekly_report(monitor: &Monitor) -> String {
 fn status_reply(monitor: &Monitor, only_low: bool) -> String {
     let settings = monitor.settings();
     let readings = monitor.poll_all(settings.balance_cache_ttl, settings.on_demand_delay);
+    if !readings.is_empty()
+        && readings.iter().all(|(_, result)| result.is_err())
+        && let Some(Err(error)) = readings.first().map(|(_, result)| result)
+    {
+        return unreadable_message(&error.user_message(), &synced_now());
+    }
     let rows: Vec<StatusRow> = readings
         .iter()
         .map(|(meter, result)| StatusRow {

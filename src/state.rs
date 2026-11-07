@@ -45,6 +45,9 @@ pub struct AlertEntry {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AlertState {
     entries: BTreeMap<String, AlertEntry>,
+    /// When the "cannot read any meter" notice was sent; cleared when readings return.
+    #[serde(default)]
+    outage_since: Option<String>,
 }
 
 impl AlertState {
@@ -90,6 +93,19 @@ impl AlertState {
                 alerted_at: now.to_string(),
             },
         );
+    }
+
+    #[must_use]
+    pub fn outage_since(&self) -> Option<&str> {
+        self.outage_since.as_deref()
+    }
+
+    pub fn set_outage(&mut self, now: &str) {
+        self.outage_since = Some(now.to_string());
+    }
+
+    pub fn clear_outage(&mut self) {
+        self.outage_since = None;
     }
 
     pub fn clear(&mut self, key: &str) {
@@ -230,6 +246,19 @@ mod tests {
         assert_eq!(state.decide("A", 900.0, t, "d3", 25.0), Decision::Recovered);
         state.clear("A");
         assert_eq!(state.decide("A", 120.0, t, "d4", 25.0), Decision::AlertNew);
+    }
+
+    #[test]
+    fn outage_flag_round_trips_and_old_files_still_load() {
+        let mut state = AlertState::default();
+        assert_eq!(state.outage_since(), None);
+        state.set_outage("2026-11-07 10:00");
+        let text = serde_json::to_string(&state).expect("serialize");
+        let back: AlertState = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(back.outage_since(), Some("2026-11-07 10:00"));
+        // A state file written before this field existed.
+        let old: AlertState = serde_json::from_str(r#"{"entries":{}}"#).expect("old format");
+        assert_eq!(old.outage_since(), None);
     }
 
     #[test]
