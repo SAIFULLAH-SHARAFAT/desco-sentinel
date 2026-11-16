@@ -42,6 +42,8 @@ jobs:
           DESCO_METERS_JSON: ${{ secrets.DESCO_METERS_JSON }}
           DESCO_USERNAME: ${{ secrets.DESCO_USERNAME }}
           DESCO_PASSWORD: ${{ secrets.DESCO_PASSWORD }}
+          # Run logs can be public: keep unit names and balances out of them.
+          RUST_LOG: warn
           NOTIFY_PROVIDER: ${{ vars.NOTIFY_PROVIDER || 'console' }}
           NOTIFY_TENANTS: ${{ vars.NOTIFY_TENANTS || 'false' }}
           DEFAULT_THRESHOLD_BDT: ${{ vars.DEFAULT_THRESHOLD_BDT || '150' }}

@@ -261,7 +261,7 @@ See [SECURITY.md](SECURITY.md) for reporting a vulnerability.
 - The DESCO password is kept in memory only, never written to disk, logs or error text, and is sent only to the portal over HTTPS.
 - The relay answers only allow-listed chats and only requests that carry Telegram's secret header (compared in constant time).
 - The tool avoids putting customer names and phone numbers into group alerts; they are shown only to allow-listed senders.
-- **Prefer a private repository.** The code holds nothing secret, but a public repository also publishes workflow run pages, including the chat id and text passed to `telegram-reply`, and the building's usage patterns if logs are verbose.
+- **Prefer a private repository.** The code holds nothing secret, but a public repository also publishes workflow run pages, including the text passed to `telegram-reply`. The workflows pin `RUST_LOG=warn` so run logs never contain meter names or balances.
 - If a token or password was ever pasted into a chat, ticket or commit, treat it as leaked: revoke or change it and update the secrets.
 
 ## Reference
