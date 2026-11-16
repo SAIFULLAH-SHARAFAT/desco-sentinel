@@ -10,6 +10,9 @@ All notable changes are listed here, newest first.
 - **Account-first labels** such as `41167724 (Mother Meter)`, selectable with `LABEL_STYLE=account|name`; narrow tables stay within 34 columns.
 - `SECURITY.md`, this changelog, and `.gitattributes` for consistent line endings.
 
+### Fixed
+- A meter recharged after the midnight snapshot was reported as low (and could trigger a false alert) until the next snapshot. The latest portal realtime reading is now preferred when it is from the snapshot's day or later.
+
 ### Changed
 - Months that the portal flags as excluded or missing now show `-` instead of a zero.
 - The month-usage figure accepts both the old and the new field name.

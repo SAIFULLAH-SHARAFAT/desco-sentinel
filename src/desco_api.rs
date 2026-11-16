@@ -238,9 +238,11 @@ pub enum Realtime {
     Fresh { balance: f64, received_at: String },
     /// No fresh reading. `reason` is a short lowercase phrase for people; `last` is the most
     /// recent realtime reading the portal still has (balance, RFC 3339 time).
+    /// `retry_at` is when the portal says a new reading may be requested (RFC 3339), if known.
     Unavailable {
         reason: String,
         last: Option<(f64, String)>,
+        retry_at: Option<String>,
     },
 }
 
@@ -249,6 +251,28 @@ impl Realtime {
         Self::Unavailable {
             reason: reason.trim().trim_end_matches('.').to_string(),
             last,
+            retry_at: None,
+        }
+    }
+
+    /// Builds the "no fresh reading" answer from a portal status entry. The wording is ours,
+    /// so it is consistent and short whatever text the portal sends.
+    fn from_status(entry: &Value, status: &str, last: Option<(f64, String)>) -> Self {
+        let reason = match status {
+            "DAILY_LIMIT_REACHED" => "today's realtime limit for this meter is used up".to_string(),
+            "COOLDOWN_ACTIVE" => "a realtime reading was requested a moment ago".to_string(),
+            "IN_PROGRESS" => "a realtime reading is already in progress".to_string(),
+            "OFFLINE" => "the meter is offline".to_string(),
+            "TIMEOUT" | "UPSTREAM_FAILURE" => "the meter did not respond in time".to_string(),
+            _ => text_field(entry, "message").map_or_else(
+                || format!("the portal answered {status}"),
+                |m| m.trim_end_matches('.').to_string(),
+            ),
+        };
+        Self::Unavailable {
+            reason,
+            last,
+            retry_at: text_field(entry, "nextEligibleAt").or_else(|| text_field(entry, "retryAt")),
         }
     }
 }
@@ -355,6 +379,8 @@ struct Portal {
     base: Url,
     jar: Arc<Jar>,
     state: Mutex<PortalState>,
+    /// Last read of the realtime summary (all meters in one call), reused for a short time.
+    summary_cache: Mutex<Option<(std::time::Instant, Value)>>,
 }
 
 pub struct DescoClient {
@@ -427,6 +453,7 @@ impl DescoClient {
             base,
             jar: Arc::clone(&self.cookie_jar),
             state: Mutex::new(PortalState::default()),
+            summary_cache: Mutex::new(None),
         });
         Ok(self)
     }
@@ -667,6 +694,62 @@ impl DescoClient {
         )
     }
 
+    /// The realtime summary for all meters, reused for 60 seconds so a status table of 15
+    /// meters costs one call, not fifteen. `None` when it cannot be read.
+    fn cached_realtime_summary(&self, portal: &Portal) -> Option<Value> {
+        const TTL: Duration = Duration::from_secs(60);
+        let mut cache = portal
+            .summary_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, value)) = cache.as_ref()
+            && at.elapsed() < TTL
+        {
+            return Some(value.clone());
+        }
+        let value = self
+            .portal_call(portal, &Method::GET, "accounts/realtime-balance", &[], None)
+            .ok()?;
+        *cache = Some((std::time::Instant::now(), value.clone()));
+        Some(value)
+    }
+
+    /// The daily snapshot is taken at midnight, so a recharge made later (or a realtime reading
+    /// taken later) is missing from it. The portal itself shows the newest of the two. When the
+    /// last realtime reading is from the snapshot's day or later, use it, so a recharged meter
+    /// is not reported as low until the next snapshot. Best effort: any problem keeps the
+    /// snapshot.
+    fn prefer_newer_realtime(&self, portal: &Portal, id: &Identifier, balance: &mut Balance) {
+        let Ok(account) = self.portal_account(portal, id) else {
+            return;
+        };
+        let Some(summary) = self.cached_realtime_summary(portal) else {
+            return;
+        };
+        let Some(entry) = summary
+            .get("meters")
+            .and_then(Value::as_array)
+            .and_then(|meters| {
+                meters
+                    .iter()
+                    .find(|m| m.get("accountId").and_then(Value::as_i64) == Some(account.id))
+            })
+        else {
+            return;
+        };
+        let (Some(value), Some(at)) = (
+            number_field(entry, "lastRealtimeBalance"),
+            text_field(entry, "lastRealtimeReceivedAt"),
+        ) else {
+            return;
+        };
+        let when = crate::clock::rfc3339_to_dhaka(&at);
+        if when.get(..10) >= balance.reading_time.get(..10) {
+            balance.balance = value;
+            balance.reading_time = when;
+        }
+    }
+
     /// Reads the balance straight from the meter, like the portal's "Get realtime balance"
     /// button. The portal allows only a few requests per meter per day, so the read-only
     /// summary is checked first: when the meter is not `AVAILABLE` no request is made (no
@@ -713,10 +796,9 @@ impl DescoClient {
                 text_field(entry, "lastRealtimeReceivedAt").unwrap_or_default(),
             )
         });
-        if text_field(entry, "status").as_deref() != Some("AVAILABLE") {
-            let reason = text_field(entry, "message")
-                .unwrap_or_else(|| "realtime balance is not available right now".to_string());
-            return Ok(Realtime::unavailable(&reason, last));
+        let status = text_field(entry, "status").unwrap_or_default();
+        if status != "AVAILABLE" {
+            return Ok(Realtime::from_status(entry, &status, last));
         }
 
         let base = format!("accounts/{}/realtime-balance", account.id);
@@ -764,19 +846,7 @@ impl DescoClient {
                         None,
                     )?;
                 }
-                other => {
-                    let reason = text_field(&current, "message").unwrap_or_else(|| match other {
-                        "OFFLINE" => "the meter is offline".to_string(),
-                        "TIMEOUT" | "UPSTREAM_FAILURE" => {
-                            "the meter did not respond in time".to_string()
-                        }
-                        "DAILY_LIMIT_REACHED" | "COOLDOWN_ACTIVE" => {
-                            "the realtime limit for this meter is used up for now".to_string()
-                        }
-                        _ => format!("the portal answered {other}"),
-                    });
-                    return Ok(Realtime::unavailable(&reason, last));
-                }
+                other => return Ok(Realtime::from_status(&current, other, last)),
             }
         }
     }
@@ -837,7 +907,9 @@ impl DescoClient {
     pub fn balance(&self, id: &Identifier, hint: Option<Backend>) -> Result<Balance, ApiError> {
         if let Some(portal) = &self.portal {
             let data = self.portal_get(portal, id, "balance", &[])?;
-            return parse_balance(&data, portal_backend(&data));
+            let mut balance = parse_balance(&data, portal_backend(&data))?;
+            self.prefer_newer_realtime(portal, id, &mut balance);
+            return Ok(balance);
         }
         match self.call("getBalance", id, hint, &[]) {
             Ok(reply) => parse_balance(&reply.data, reply.backend),

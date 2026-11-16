@@ -171,6 +171,7 @@ impl Monitor {
             return Realtime::Unavailable {
                 reason: "meter has no identifier".to_string(),
                 last: None,
+                retry_at: None,
             };
         };
         match self.api.realtime_balance(
@@ -184,6 +185,7 @@ impl Monitor {
                 Realtime::Unavailable {
                     reason: e.user_message().trim_end_matches('.').to_lowercase(),
                     last: None,
+                    retry_at: None,
                 }
             }
         }

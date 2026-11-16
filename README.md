@@ -164,7 +164,8 @@ The daily balance is a snapshot taken at midnight. Like the portal's **Get realt
 - The portal allows only a few realtime requests per meter per day. The summary is read first; when the limit is used up **no request is made**, so no attempt is spent. The card shows the snapshot and the last realtime reading with a short, polite explanation.
 - A request carries an idempotency key, so a retried network call cannot consume a second attempt.
 - An offline meter or one that does not answer within `REALTIME_WAIT_SECS` produces a note, not an error.
-- `status`, `low` and scheduled alerts never request realtime balances.
+- `status`, `low` and scheduled alerts never *request* realtime balances. They do reuse the portal's **latest existing** realtime reading when it is newer than the daily snapshot, exactly as the portal's own page does, so a meter you recharged after midnight is not reported as low. One summary call serves all meters and is cached for 60 seconds.
+- The card leads with the newest known balance and shows the daily snapshot beneath it. When the daily limit is used up it says when a new reading is possible.
 
 ## Deployment
 

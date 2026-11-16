@@ -109,10 +109,10 @@ fn start_portal(password: &'static str, state: Arc<Portal>) -> String {
                         Response::from_string(BALANCE)
                     } else if p == "/api/accounts/realtime-balance" {
                         let status = state.realtime_status.lock().expect("lock").clone();
-                        let extra = if status == "AVAILABLE" {
-                            String::new()
+                        let extra = if status == "DAILY_LIMIT_REACHED" {
+                            r#","message":"You have already requested a realtime balance for this meter today.","lastRealtimeBalance":971.11,"lastRealtimeReceivedAt":"2026-11-16T00:09:13.056Z","nextEligibleAt":"2026-11-16T18:00:00Z""#.to_string()
                         } else {
-                            r#","message":"You have already requested a realtime balance for this meter today.","lastRealtimeBalance":971.11,"lastRealtimeReceivedAt":"2026-11-16T00:09:13.056Z""#.to_string()
+                            String::new()
                         };
                         Response::from_string(format!(
                             r#"{{"enabled":true,"meters":[{{"accountId":41810,"accountNo":"41167724","status":"{status}"{extra}}}]}}"#
@@ -264,10 +264,16 @@ fn realtime_is_not_requested_when_the_daily_limit_is_used_up() {
     let result = api
         .realtime_balance(&account("41167724"), Duration::from_secs(5), FAST)
         .expect("realtime");
-    let Realtime::Unavailable { reason, last } = result else {
+    let Realtime::Unavailable {
+        reason,
+        last,
+        retry_at,
+    } = result
+    else {
         panic!("expected unavailable, got {result:?}");
     };
-    assert!(reason.contains("already requested"), "{reason}");
+    assert!(reason.contains("limit"), "{reason}");
+    assert_eq!(retry_at.as_deref(), Some("2026-11-16T18:00:00Z"));
     assert_eq!(
         last.map(|(b, _)| b),
         Some(971.11),
@@ -292,4 +298,28 @@ fn realtime_gives_up_politely_when_the_meter_never_answers() {
         matches!(&result, Realtime::Unavailable { reason, .. } if reason.contains("did not answer")),
         "{result:?}"
     );
+}
+
+#[test]
+fn balance_prefers_a_realtime_reading_taken_after_the_daily_snapshot() {
+    // Snapshot: 362.91 for 2026-11-15. The portal's last realtime reading (971.11, taken on
+    // 2026-11-16 Dhaka time) is newer, as after a recharge.
+    let state = Portal::with_realtime_status("DAILY_LIMIT_REACHED");
+    let base = start_portal("secret", state);
+    let b = client(&base, "secret")
+        .balance(&account("41167724"), None)
+        .expect("balance");
+    assert!((b.balance - 971.11).abs() < 1e-9, "{b:?}");
+    assert_eq!(b.reading_time, "2026-11-16 06:09");
+}
+
+#[test]
+fn balance_keeps_the_snapshot_when_there_is_no_newer_realtime_reading() {
+    let state = Portal::with_realtime_status("AVAILABLE");
+    let base = start_portal("secret", state);
+    let b = client(&base, "secret")
+        .balance(&account("41167724"), None)
+        .expect("balance");
+    assert!((b.balance - 362.91).abs() < 1e-9, "{b:?}");
+    assert_eq!(b.reading_time, "2026-11-15");
 }
