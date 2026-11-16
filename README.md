@@ -1,82 +1,159 @@
 # desco-sentinel
 
-Monitor many DESCO prepaid meters at once, get a WhatsApp (or Telegram) alert before a meter runs out of credit, and ask the bot for balances from your phone.
+[![CI](https://github.com/SAIFULLAH-SHARAFAT/desco-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/SAIFULLAH-SHARAFAT/desco-sentinel/actions/workflows/ci.yml)
 
-Built for a building manager in Dhaka who looks after 20+ smart prepaid meters (apartments, lift, water pump). Checking each one by hand on the DESCO portal does not scale, and a meter that hits zero trips its relay.
+Watches many DESCO prepaid meters at once, warns you on Telegram or WhatsApp before a meter runs out of credit, and answers balance questions from your phone.
 
-- **Low-balance alerts** when a balance falls below a threshold (default 150 BDT, per-meter overrides such as 500 BDT for the lift).
-- **No alert spam.** Each low meter is reported once, again only if a new reading shows it fell a further 25 BDT, and the record is cleared when the meter is recharged.
-- **Two-way WhatsApp bot.** Send `status`, `info`, the last 3 digits of an account or meter number (`421`), or a unit name (`1A`) and get a phone-sized table or a detail card back.
-- **Config only.** Add meters, change thresholds or switch notification provider by editing JSON / environment variables. No code changes.
-- Single static binary, synchronous HTTP, no database.
+It was built for a building manager in Dhaka who looks after 15 to 20+ smart prepaid meters (apartments, lift, water pump). Checking each meter on the DESCO portal by hand does not scale, and a meter that reaches zero trips its relay.
+
+| | |
+|---|---|
+| **Low-balance alerts** | Per-meter thresholds (default 150 BDT, for example 500 BDT for the lift). |
+| **No alert spam** | A low meter is reported once, again only after a further drop of 25 BDT, and the record clears when the meter is recharged. |
+| **Two-way bot** | `status`, `low`, `info`, the last 3 digits of an account or meter number (`825`) or a unit name (`lift`) return a phone-sized table or a detail card. |
+| **Realtime balance** | A single-meter lookup also reads the balance from the meter itself, within the portal's daily limit. |
+| **Configuration only** | Meters, thresholds, labels and providers are JSON and environment variables. No code changes. |
+| **Small and self-contained** | One static Rust binary, synchronous HTTP, no database. |
+
+> Not an official DESCO product and not affiliated with DESCO.
+
+## Contents
+
+[How it works](#how-it-works) ·
+[Quick start](#quick-start) ·
+[Configuration](#configuration) ·
+[Commands](#commands) ·
+[Telegram bot](#telegram-bot) ·
+[Realtime balance](#realtime-balance) ·
+[Deployment](#deployment) ·
+[Operations](#operations) ·
+[Security](#security) ·
+[Reference](#reference) ·
+[Development](#development)
+
+## How it works
+
+```
+                          ┌──────────────────────────────┐
+ you ── Telegram ───────► │ Cloudflare Worker (worker/)  │  checks Telegram's secret header
+                          │ answers /help, relays the    │  and the allow-listed chat id
+                          │ rest                         │
+                          └──────────────┬───────────────┘
+                                         │ workflow_dispatch (GitHub API)
+                                         ▼
+                          ┌──────────────────────────────┐        ┌──────────────────────┐
+                          │ GitHub Actions: telegram-    │ HTTPS  │ prepaid.desco.org.bd │
+                          │ reply  →  desco-sentinel     │ ◄────► │ signed-in portal API │
+                          └──────────────┬───────────────┘        └──────────────────────┘
+                                         │ Bot API
+                                         ▼
+                                    your Telegram chat
+
+ GitHub Actions (cron): monitor every 6 h → alerts, weekly-report on Sundays
+```
+
+The DESCO portal requires a customer sign-in since 6 November 2026. The client logs in the way the website does (cookie session plus an XSRF header), lists the accounts linked to that login, and reads balance, customer summary, recharge history and monthly usage from the signed-in API. The 12-hour session is renewed automatically. Only meters **linked to the portal login** can be read.
 
 ## Quick start
 
+Prerequisites: Rust 1.88 or newer, and a DESCO prepaid portal account with your meters linked (portal → Accounts → *Link a new account*, up to 20 per login).
+
 ```sh
-cp config/meters.example.json config/meters.json   # edit: your real account and/or meter numbers
-cp config/settings.example.env .env                # optional settings and secrets
+cp config/meters.example.json config/meters.json   # your account / meter numbers
+cp config/settings.example.env .env                # set DESCO_USERNAME and DESCO_PASSWORD
 
 cargo run --release -- status                      # table of every meter
-cargo run --release -- query 421                   # what the WhatsApp bot would answer
-cargo run --release -- check --dry-run             # print the alerts that would be sent
+cargo run --release -- query 825                   # what the bot would answer
+cargo run --release -- check --dry-run             # alerts that would be sent, nothing is sent
 ```
 
-`config/meters.json`, `.env` and `state/` are git-ignored.
+`.env`, `config/meters.json` and `state/` are git-ignored.
 
-### Labels
+## Configuration
 
-Messages name a meter by its account number with the unit name in brackets, for example `41167724 (Mother Meter)`. Set `LABEL_STYLE=name` to get the unit name only (the original layout with a separate `Acc#` column). In the narrow tables the bracketed name is shortened to fit a phone screen; cards and alerts show it in full.
+Everything is optional except the portal login and the meter list. The full list with comments is in [`config/settings.example.env`](config/settings.example.env).
+
+### Portal login
+
+| Variable | Meaning |
+|---|---|
+| `DESCO_USERNAME` | Phone number or email you registered on the portal. |
+| `DESCO_PASSWORD` | Its password. Held in memory only; hidden from logs, errors and `Debug` output. |
+
+Without them the tool falls back to DESCO's old public endpoints, which now answer `401`, and says so in plain words.
 
 ### Meter list
 
 ```json
 [
-  { "unit_name": "Apt 1A", "short_name": "Apt 1A", "account_no": "98765401", "meter_no": "667788990001",
+  { "unit_name": "Mother Meter", "short_name": "Mother", "account_no": "98765401", "meter_no": "667788990001",
     "threshold_bdt": 150.0, "notify_phone": "8801700000000", "enabled": true },
-  { "unit_name": "Common - Lift & Pump", "short_name": "Lift", "account_no": "98765499",
-    "threshold_bdt": 500.0, "backend_hint": "unified" }
+  { "unit_name": "Lift and Pump", "short_name": "Lift", "account_no": "98765499", "threshold_bdt": 500.0 }
 ]
 ```
 
 | Field | Meaning |
 |---|---|
 | `unit_name` | Unique display name. Also the key in the state file, so renaming a unit forgets its alert history. |
-| `short_name` | Optional label for narrow WhatsApp tables (about 9 characters fit). |
-| `account_no` / `meter_no` | Give either one or both. A 12-digit number is a meter number, anything shorter is an account number. The `DESCO-` prefix is accepted. The missing number is filled in from the API, so last-3-digit lookups match both. |
+| `short_name` | Optional label for the narrow tables. |
+| `account_no` / `meter_no` | Give either or both. A 12-digit number is a meter number, anything shorter an account number. The `DESCO-` prefix is accepted. The missing number is filled in from the portal, so last-3-digit lookups match both. |
 | `identifier` | Alternative single field holding either kind of number. |
 | `threshold_bdt` | Alert below this balance. Falls back to `DEFAULT_THRESHOLD_BDT`. |
-| `notify_phone` | Tenant to message directly when `NOTIFY_TENANTS=true`. |
+| `notify_phone` | A tenant to message directly when `NOTIFY_TENANTS=true`. |
 | `enabled` | `false` keeps the entry but skips it. |
-| `backend_hint` | `unified` or `tkdes`. Skips a wasted first call when you know where the meter lives. The program also learns this by itself. |
+| `backend_hint` | `unified` or `tkdes`; only used by the legacy public endpoints. |
 
-For GitHub Actions, put the whole array in a secret named `DESCO_METERS_JSON`. If that variable is set it wins over the file. `--config <file>` selects another file.
+On GitHub Actions put the whole array in the secret `DESCO_METERS_JSON`; it wins over the file. `--config <file>` selects another file.
+
+### Labels
+
+Messages name a meter by its account number with the unit name in brackets, for example `41167724 (Mother Meter)`. `LABEL_STYLE=name` gives the unit name only, with a separate `Acc#` column. In the narrow tables the bracketed name is shortened so every line stays within 34 columns; cards and alerts show it in full.
+
+### Tuning
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DEFAULT_THRESHOLD_BDT` | 150 | Alert level when a meter has none. |
+| `FOLLOWUP_DROP_BDT` | 25 | Extra drop since the last alert that triggers a follow-up. |
+| `RATE_LIMIT_MS` / `ON_DEMAND_DELAY_MS` | 1000 / 200 | Pause between meters in scheduled checks / in bot replies. |
+| `MAX_RETRIES`, `REQUEST_TIMEOUT_SECS` | 2, 20 | Retry and timeout policy for portal requests. |
+| `BALANCE_CACHE_SECS` | 300 | How long a bot reply may reuse a reading. |
+| `REALTIME_ON_LOOKUP` | true | Ask the meter itself on single-meter lookups. |
+| `REALTIME_MAX_METERS` | 2 | Lookups matching more meters skip realtime. |
+| `REALTIME_WAIT_SECS` / `REALTIME_POLL_MS` | 45 / 2000 | How long to wait for the meter and how often to check. |
+| `DESCO_BASE_URL`, `DESCO_INSECURE_TLS` | portal API, false | Override the endpoint or skip certificate checks. |
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `check` (default) | Poll enabled meters, apply the de-duplication rules, send alerts. Exit code is non-zero if a delivery failed or every meter was unreadable. |
-| `check --dry-run` | Print the alerts, send nothing, write no alert state. |
-| `status` | ASCII table of all meters plus the WhatsApp preview. |
-| `info` | Directory: account, meter, customer name, contact, load, tariff. |
-| `query <text>` | Run the bot engine locally, for example `query 421` or `query status`. |
-| `serve` | Webhook server for the two-way bot, with a background check every `CHECK_INTERVAL_HOURS`. |
-| `history <unit \| last-3 \| number>` | Last 5 recharges and recent monthly consumption. Works for numbers that are not in your config too. |
+| `check` (default) | Poll enabled meters, apply the de-duplication rules, send alerts. Exits non-zero if a delivery failed or every meter was unreadable. |
+| `check --dry-run` | Print the alerts, send nothing, write no state. |
+| `status` | ASCII table of all meters plus the chat preview. |
+| `info` | Directory: account, meter, customer, contact, load, tariff. |
+| `query <text>` | Run the bot engine locally, for example `query 825` or `query low`. |
+| `history <unit \| last-3 \| number>` | Last 5 recharges and recent monthly consumption. |
+| `report` | Send the list of meters below their alert level, even when empty. |
+| `reply --chat <id> --text <msg>` | Answer one chat message and exit (used by the relay). |
+| `bot` | Answer Telegram by long polling. |
+| `serve` | Webhook server for WhatsApp, with a background check every `CHECK_INTERVAL_HOURS`. |
 
-### What the bot understands
+## Telegram bot
 
-| Message | Reply |
+| Send | You get |
 |---|---|
-| `low` | Only the meters below their alert level, lowest first |
-| `all`, `status`, `table`, `list`, `balance` | Table of every meter, each line at most 34 columns so it does not wrap on a phone |
-| `info`, `meters`, `directory` | Compact directory (customer names only for allow-listed senders) |
-| `421` (3 digits) | Card for every meter whose account **or** meter number ends in 421 |
-| `1A`, `lift` | Card for the matching unit(s) |
-| `help`, anything else | Command menu |
+| `/status`, `status` | Balance of every meter |
+| `/low`, `low` | Only meters below their alert level, lowest first |
+| `825` or `status 825` | Card for the meter whose account **or** meter number ends in 825, with a realtime reading |
+| `lift` | Card by unit name (part of the name is enough) |
+| `/info`, `info` | Directory of all meters |
+| `/help` | Command list |
+
+Only chats in `TELEGRAM_CHAT_ID` (or `TELEGRAM_ALLOWED_CHATS`) are answered. Anyone else is told their chat id so you can add them. Alert recipients and people allowed to ask questions are the same list.
 
 ## Realtime balance
 
-The daily balance is a snapshot taken at midnight. Like the portal's **Get realtime balance** button, a lookup of one meter (last 3 digits such as `825`, or a unit name) also asks the meter itself and shows the answer on the card:
+The daily balance is a snapshot taken at midnight. Like the portal's **Get realtime balance** button, a lookup of one meter also asks the meter itself and shows the answer on the card:
 
 ```
 🟢 Realtime balance: 971.11 BDT
@@ -84,137 +161,131 @@ The daily balance is a snapshot taken at midnight. Like the portal's **Get realt
 📅 Daily snapshot: 94.83 BDT
 ```
 
-- The portal allows only a few realtime requests per meter per day. The bot looks at the portal's summary first, and if the limit is used up it makes **no request**: it shows the daily snapshot and the last realtime reading, with a short explanation.
-- A meter that is offline or does not answer within `REALTIME_WAIT_SECS` gives a polite note instead of an error.
-- Lookups matching more than `REALTIME_MAX_METERS` meters skip it, so one broad message cannot use up every meter's attempts. `status`, `low` and the scheduled alerts never request realtime balances.
-- Turn it off with `REALTIME_ON_LOOKUP=false`. Needs the portal login (`DESCO_USERNAME` / `DESCO_PASSWORD`).
-
-## Security
-
-- **Nothing secret is stored in the repository.** `.env`, `config/meters.json` and `state/` are git-ignored. Keep the repository **private**.
-- **Where secrets live:** GitHub Actions secrets (`DESCO_USERNAME`, `DESCO_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `DESCO_METERS_JSON`) and Cloudflare Worker secrets (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `ALLOWED_CHATS`, `GITHUB_TOKEN`). Both platforms encrypt them at rest and hide them in logs.
-- The DESCO password is held only in memory, is hidden from `Debug` output and error messages, and is sent only to the portal over HTTPS.
-- The relay answers only chats listed in `ALLOWED_CHATS`, and only requests carrying Telegram's secret header.
-- If a token or password was ever pasted into a chat, a ticket or a commit, treat it as leaked: revoke or change it and update the secrets.
-
-## Weekly report
-
-`desco-sentinel report` sends the list of meters below their alert level (the same as `low`) to the recipients, even when nothing is low, so a quiet week still shows the monitor is alive. `.github/workflows/weekly-report.yml` runs it every **Sunday at 11:30 AM Dhaka time** (`30 5 * * 0`, because GitHub schedules in UTC and Dhaka is UTC+6 all year). GitHub can start scheduled runs a few minutes late. The 6-hourly `monitor` workflow keeps sending instant alerts when a meter newly drops below its level; delete `monitor-cron.yml` or its `schedule:` block if you only want the weekly report.
-
-With Meta WhatsApp the weekly report is plain text, which Meta only delivers inside the 24-hour window; Telegram and WAHA / Green-API have no such limit.
-
-## Notifications
-
-Select with `NOTIFY_PROVIDER`:
-
-- `whatsapp_meta`: [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api). Needs `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, `RECIPIENT_PHONE`.
-  Meta only delivers free-form text to numbers that messaged you in the last 24 hours. Scheduled alerts therefore need an approved **message template** with four body variables (`{{1}}` unit, `{{2}}` balance, `{{3}}` threshold, `{{4}}` details). Set `WA_TEMPLATE_NAME` (and `WA_TEMPLATE_LANG`). Replies to bot queries are plain text, which is allowed inside the 24-hour window.
-  The Graph API version is configurable with `WA_GRAPH_VERSION`.
-- `whatsapp_webhook`: self-hosted [WAHA](https://waha.devlike.pro/) or [Green-API](https://green-api.com/) using a QR-linked number. Set `WA_WEBHOOK_URL`, `WA_CHAT_ID` (a group or a number), and for WAHA `WA_WEBHOOK_TOKEN`. Use `WA_WEBHOOK_FORMAT=green` for Green-API.
-- `telegram`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
-- `console`: print to stdout (default).
-
-Several recipients can be listed, comma-separated (`RECIPIENT_PHONE=<primary>,<secondary>`). They are tried in order, primary first. An alert counts as delivered when at least one recipient received it, so a failure for one number does not cause duplicates to the other on the next run.
-
-All variables are listed in [`config/settings.example.env`](config/settings.example.env).
-
-## Telegram bot
-
-Commands (send them to the bot in Telegram):
-
-| Send | You get |
-|---|---|
-| `/status` or `status` | balance of every meter |
-| `/low` or `low` | only the meters below their alert level, lowest balance first |
-| `825` or `status 825` | details of the meter whose account or meter number ends in 825 |
-| `lift` | details by unit name (a part of the name is enough) |
-| `/info` or `info` | directory of all meters |
-| `/help` | the command list |
-
-Only chats listed in `TELEGRAM_CHAT_ID` (or `TELEGRAM_ALLOWED_CHATS`) are answered. Anyone else is told their chat id, so you can add them. The alert recipients and the people allowed to ask questions are the same list.
-
-### Running it without a server (GitHub + Cloudflare)
-
-A Telegram bot normally needs a program that stays running. To avoid hosting one, questions are handled event by event:
-
-```
-Telegram -> Cloudflare Worker (worker/) -> GitHub workflow telegram-reply -> Telegram
-```
-
-1. Telegram calls the Worker's webhook for every message. The Worker checks Telegram's secret header and the chat id, answers `/help` itself, and starts the `telegram-reply` workflow for everything else.
-2. The workflow downloads the prebuilt binary from the rolling `latest` release (published by `release-binary.yml`), runs `desco-sentinel reply --chat <id> --text <message>` and exits. Replies take about 30 seconds and cost about one Actions minute each.
-
-Setup:
-
-- **Worker.** Create a Cloudflare Worker named `desco-sentinel` connected to this repository (the root `wrangler.jsonc` points at `worker/src/index.js`). Add four **runtime** secrets (Settings, Runtime, Variables and secrets; not the ones under Builds, which only exist during the build): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (any long random string), `ALLOWED_CHATS` (comma-separated chat ids) and `GITHUB_TOKEN` (a fine-grained token for this repository with only "Actions: read and write"). If a secret is missing or malformed, the Worker answers authenticated calls with a 500 that names it.
-- **GitHub secrets.** `DESCO_METERS_JSON`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (same list as `ALLOWED_CHATS`), plus the variable `NOTIFY_PROVIDER=telegram`.
-- **Webhook.** Register it once, using the same secret as the Worker:
-  `curl "https://api.telegram.org/bot<TOKEN>/setWebhook" -d url=https://desco-sentinel.<account>.workers.dev -d secret_token=<TELEGRAM_WEBHOOK_SECRET> -d 'allowed_updates=["message"]'`
-- **Adding a person.** They press Start in the bot and send you the chat id it shows. Add it to `TELEGRAM_CHAT_ID` (GitHub secret) and `ALLOWED_CHATS` (Worker secret).
-- **Tokens expire.** When the GitHub token expires, the relay tells the user "Could not start the check". Create a new one and update the Worker secret.
-
-Notes: message text goes through environment variables, never into shell commands. The reply workflow logs only warnings, because run logs in a public repository would be public. Keep this repository private.
-
-### Running it on your own machine or server
-
-`desco-sentinel bot` answers Telegram messages by long polling, with no webhook and no public URL. Use it on any machine that stays on, in place of the Worker. While a webhook is registered Telegram refuses polling, so remove it first with `deleteWebhook`. `scripts/windows-autostart.ps1` installs it as a Windows logon task.
+- The portal allows only a few realtime requests per meter per day. The summary is read first; when the limit is used up **no request is made**, so no attempt is spent. The card shows the snapshot and the last realtime reading with a short, polite explanation.
+- A request carries an idempotency key, so a retried network call cannot consume a second attempt.
+- An offline meter or one that does not answer within `REALTIME_WAIT_SECS` produces a note, not an error.
+- `status`, `low` and scheduled alerts never request realtime balances.
 
 ## Deployment
 
-### Scheduled alerts on GitHub Actions
+### Scheduled alerts and the Telegram bot on GitHub Actions and Cloudflare (no server)
 
-`.github/workflows/monitor-cron.yml` runs `check` every 6 hours and on demand (with a dry-run option). Add your meter list and provider credentials as repository secrets and variables (names are in the workflow). The de-duplication state is kept in the Actions cache between runs, so you are not re-alerted every 6 hours. If the cache is ever evicted you get at most one repeat alert per low meter.
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `ci.yml` | push, pull request | format, clippy, tests, dependency audit, worker tests |
+| `release-binary.yml` | push to `main` touching code | builds the Linux binary and publishes it as the rolling `latest` release |
+| `telegram-reply.yml` | started by the Worker | downloads `latest`, answers one message, exits |
+| `monitor-cron.yml` | every 6 h, manual | `check`; de-duplication state kept in the Actions cache |
+| `weekly-report.yml` | Sundays 11:30 Dhaka | `report` |
 
-Scheduled workflows in public repositories are paused after 60 days without repository activity. Keep the repository private (it holds nothing secret, but it is your building's setup) or re-enable the schedule when GitHub asks.
+**1. GitHub repository secrets** (Settings → Secrets and variables → Actions) and variable:
 
-### Two-way bot (`serve`)
+| Name | Kind | Value |
+|---|---|---|
+| `DESCO_USERNAME`, `DESCO_PASSWORD` | secret | portal login |
+| `DESCO_METERS_JSON` | secret | the meter list as one JSON line |
+| `TELEGRAM_BOT_TOKEN` | secret | from @BotFather |
+| `TELEGRAM_CHAT_ID` | secret | allowed chat ids, comma-separated |
+| `NOTIFY_PROVIDER` | variable | `telegram` |
 
-The bot needs a process that stays up and a public HTTPS URL, so it cannot run on Actions. Use a small VPS or container host:
+**2. Cloudflare Worker** named `desco-sentinel`, deployed from this repository (`wrangler.jsonc` points at `worker/src/index.js` and sets `GITHUB_REPO` and `GITHUB_REF`). Add four **runtime** secrets (Settings → Variables and secrets, not the build ones):
+
+| Secret | Value |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | the bot token |
+| `TELEGRAM_WEBHOOK_SECRET` | a long random string, also given to Telegram below |
+| `ALLOWED_CHATS` | the same chat ids as `TELEGRAM_CHAT_ID` |
+| `GITHUB_TOKEN` | fine-grained token for **this repository only**, permission *Actions: read and write* |
+
+A missing or malformed secret makes the Worker answer authenticated calls with a 500 that names it.
+
+**3. Register the webhook once**, with the same secret:
+
+```sh
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -d url=https://desco-sentinel.<account>.workers.dev \
+  -d secret_token=<TELEGRAM_WEBHOOK_SECRET> \
+  -d 'allowed_updates=["message"]'
+```
+
+Replies take about 30 seconds and cost about one Actions minute each. Message text reaches the program through environment variables, never through shell command text.
+
+### Your own machine
+
+`desco-sentinel bot` answers Telegram by long polling: no webhook, no public URL. While a webhook is registered Telegram refuses polling, so call `deleteWebhook` first. `scripts/windows-autostart.ps1` installs it as a Windows logon task.
+
+### WhatsApp (`serve`)
+
+Needs a process that stays up and a public HTTPS URL (a small VPS or container host):
 
 ```sh
 docker build -t desco-sentinel .
 docker run -d --env-file .env -v "$PWD/config:/app/config:ro" -v sentinel-state:/app/state -p 8080:8080 desco-sentinel
 ```
 
-Point the provider's webhook at `https://<your-host>/webhook`:
+Point the provider's webhook at `https://<your-host>/webhook`. Meta: verify token `WA_VERIFY_TOKEN` and `WA_APP_SECRET` so `X-Hub-Signature-256` is checked. WAHA / Green-API: add `?token=<WEBHOOK_SECRET>` or an `X-Webhook-Token` header. `GET /health` returns `{"status":"ok"}`. **Set `ALLOWED_SENDERS`**: without it anyone who finds the bot can read balances, and customer names and phones are hidden from replies.
 
-- **Meta**: callback URL as above, verify token = `WA_VERIFY_TOKEN`, and set `WA_APP_SECRET` so the `X-Hub-Signature-256` header is checked.
-- **WAHA / Green-API**: add `?token=<WEBHOOK_SECRET>` to the URL (or send an `X-Webhook-Token` header).
+### Notification providers
 
-`GET /health` returns `{"status":"ok"}`.
+Select with `NOTIFY_PROVIDER`: `telegram`, `whatsapp_meta` (WhatsApp Cloud API; scheduled alerts need an approved template with four body variables), `whatsapp_webhook` (self-hosted WAHA or Green-API) or `console`. Several recipients may be comma-separated; an alert counts as delivered when at least one received it.
 
-**Set `ALLOWED_SENDERS`** (comma-separated phone numbers). Without it anyone who finds the bot can read balances, and customer names and phone numbers are hidden from replies. DESCO's API exposes names, addresses and phones for any account number, so this tool avoids putting them into group alerts and only shows them to allow-listed senders.
+## Operations
 
-## When DESCO cannot be read
+**When DESCO cannot be read.** If a check reads no meter at all, the tool says so instead of showing a misleading table: `status` and `low` explain the reason, and the scheduled check sends one message when readings stop and one when they return. Typical causes: wrong or changed password ("Could not sign in to the DESCO portal"), a meter not linked to the login ("not linked to the DESCO portal login"), or DESCO being down.
 
-If a check cannot read **any** meter, nobody can be warned about low balances, so the tool says so instead of showing a misleading table:
+**Changing the DESCO password.** Update `DESCO_PASSWORD` in the GitHub secrets and in your local `.env`.
 
-- `status` and `low` reply "Cannot read the meters right now" with the reason.
-- The scheduled check sends one message to the alert recipients when readings stop, and one when they return. It does not repeat while the problem lasts.
-- In the Actions log the cause is the `error=` text, for example `HTTP 401 from DESCO`.
+**Adding a meter.** Link it on the portal, add it to `DESCO_METERS_JSON` (and `config/meters.json`).
 
-Since 6 November 2026 DESCO's portal answers `401 AUTHENTICATION_REQUIRED` to its old public endpoints, because it introduced customer sign-in. The tool now signs in the way the website does. Set `DESCO_USERNAME` (the phone or email you registered with) and `DESCO_PASSWORD` in `.env`, or as GitHub secrets of the same names. Without them the error reads "DESCO's customer portal asks for a sign-in".
+**Adding a person to the bot.** They press Start and send you the chat id the bot shows. Add it to `TELEGRAM_CHAT_ID` (GitHub) and `ALLOWED_CHATS` (Cloudflare).
 
-**Every meter you monitor must be linked to that portal login** (portal, Accounts, "Link a new account"; up to 20 per login). A meter that is not linked is reported as not found. A wrong password shows as "Could not sign in to the DESCO portal"; the password is never printed or logged. If you change the password on the portal, update the secret too.
+**Expired GitHub token.** Users see "Could not start the check". Create a new fine-grained token and update the Worker secret `GITHUB_TOKEN`.
 
-## How alerts work
+**Moving or renaming the repository.** GitHub secrets and variables do not move with it, and a fine-grained token stays bound to the old repository. Re-create the secrets, issue a new `GITHUB_TOKEN` for the new repository, update the Worker secret, reconnect Workers Builds to the new repository if you deploy through it, and let `release-binary` publish `latest` once.
+
+### How alerts work
 
 For every enabled meter on each check:
 
-1. Balance at or above the threshold: forget any earlier alert for that meter.
+1. Balance at or above the threshold: forget any earlier alert.
 2. Below the threshold and not alerted yet: send an alert and remember balance and reading time.
 3. Below the threshold and already alerted: send a follow-up only if the reading time changed **and** the balance is at least 25 BDT lower than at the last alert.
 
-A failed delivery is not recorded, so the next run retries it. Meters push readings to DESCO a few times a day, which is why polling every 4 to 6 hours is enough. `readingTime` is sometimes only a date, so follow-ups are at most daily.
+A failed delivery is not recorded, so the next run retries it. Meters push readings to DESCO a few times a day, so polling every 4 to 6 hours is enough. `readingTime` is sometimes only a date, so follow-ups are at most daily.
 
-## DESCO API notes
+## Security
 
-Signed in, the client uses `POST /api/auth/login` (after `GET /api/auth/csrf`, echoing the `XSRF-TOKEN` cookie in an `X-XSRF-TOKEN` header), then `GET /api/accounts` for the internal account ids and `/api/accounts/{id}/balance`, `/summary`, `/transactions`, `/usage/monthly`. The 12-hour session cookie is renewed automatically. The notes below describe the old public API, which is still used when no credentials are set:
+See [SECURITY.md](SECURITY.md) for reporting a vulnerability.
 
-- Two back ends, `unified` and `tkdes`. A meter normally exists on one. "Not found" arrives as HTTP 200 with `data: null` or with codes such as `16001` / `16002`, so the fallback rule is "code is not 200 or data is null", then try the other back end.
-- Send exactly one of `accountNo` / `meterNo`. A 12-digit value is a meter number; passing a mismatched pair returns no data. `DESCO-` prefixes are not understood by the API and are stripped.
-- `readingTime` can be `2026-10-18` or `2026-10-18 00:00:00`; it is treated as an opaque string.
-- The TLS chain has been incomplete in the past. Strict TLS is tried first and relaxed automatically if the certificate is rejected (or set `DESCO_INSECURE_TLS=true`).
+- **No secret is stored in the repository.** `.env`, `config/meters.json` and `state/` are git-ignored; credentials live in encrypted GitHub Actions secrets and Cloudflare Worker secrets, both hidden in logs.
+- The DESCO password is kept in memory only, never written to disk, logs or error text, and is sent only to the portal over HTTPS.
+- The relay answers only allow-listed chats and only requests that carry Telegram's secret header (compared in constant time).
+- The tool avoids putting customer names and phone numbers into group alerts; they are shown only to allow-listed senders.
+- **Prefer a private repository.** The code holds nothing secret, but a public repository also publishes workflow run pages, including the chat id and text passed to `telegram-reply`, and the building's usage patterns if logs are verbose.
+- If a token or password was ever pasted into a chat, ticket or commit, treat it as leaked: revoke or change it and update the secrets.
+
+## Reference
+
+### DESCO portal API (signed in)
+
+`GET /api/auth/csrf` hands out the `XSRF-TOKEN` cookie. `POST /api/auth/login` takes `{username, password}` with that value in the `X-XSRF-TOKEN` header and sets the `DESCO_SESSION` cookie (12 hours). Then:
+
+| Call | Used for |
+|---|---|
+| `GET /api/accounts` | internal account ids for the linked accounts |
+| `GET /api/accounts/{id}/balance` | daily balance snapshot |
+| `GET /api/accounts/{id}/summary` | customer, load, tariff, feeder |
+| `GET /api/accounts/{id}/transactions` | recharge history |
+| `GET /api/accounts/{id}/usage/monthly` | monthly consumption (invalid months are excluded) |
+| `GET /api/accounts/realtime-balance` | per-meter realtime availability and last reading |
+| `POST /api/accounts/{id}/realtime-balance` | start a realtime read (`idempotencyKey`) |
+| `GET /api/accounts/{id}/realtime-balance/{requestId}` | poll until `SUCCESS` or a failure status |
+
+An expired session is renewed once per request. A TLS chain that the platform rejects makes the client retry with relaxed checks, or set `DESCO_INSECURE_TLS=true`.
+
+### Legacy public API
+
+Used only when no credentials are set. Two back ends, `unified` and `tkdes`; "not found" arrives as HTTP 200 with `data: null` or codes such as `16001`, so the rule is "code is not 200 or data is null", then try the other back end. Send exactly one of `accountNo` / `meterNo`.
 
 ## Development
 
@@ -224,10 +295,12 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Tests run offline: sample payloads in `tests/fixtures`, a local fake DESCO server for fallback / retry behaviour, a local fake provider for notification requests, property tests for parsers and the alert state machine, and snapshot tests for message formats.
+Tests run offline: recorded payloads in `tests/fixtures`, a fake DESCO server for the sign-in, session-expiry and realtime flows, a fake notification provider, property tests for parsers and the alert state machine, and snapshot tests for message formats.
 
-Layout: `domain.rs` (validated newtypes), `config.rs`, `desco_api.rs`, `state.rs`, `monitor.rs` (polling, caches, alert run), `formatter.rs`, `query_engine.rs`, `notifier.rs`, `webhook_server.rs`, `main.rs`.
+Layout: `domain.rs` (validated newtypes), `config.rs`, `desco_api.rs` (portal client), `state.rs`, `monitor.rs` (polling, caches, alert run), `formatter.rs` (pure text rendering), `query_engine.rs` (bot logic), `notifier.rs`, `telegram_bot.rs`, `webhook_server.rs`, `clock.rs`, `main.rs`, and `worker/` (the Cloudflare relay).
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed between versions.
 
 ## License
 
-Source-available, free for non-commercial use. Commercial use requires the author's written permission and may require payment. See [LICENSE](LICENSE). This is not an official DESCO product and is not affiliated with DESCO.
+Source-available, free for non-commercial use. Commercial use requires the author's written permission and may require payment. See [LICENSE](LICENSE).
