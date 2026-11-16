@@ -384,6 +384,11 @@ pub fn whatsapp_card(card: &CardData<'_>, show_pii: bool) -> String {
     // A fresh realtime reading beats the daily snapshot for the red/green decision.
     let effective = match card.realtime {
         Some(Realtime::Fresh { balance, .. }) => *balance,
+        // The portal's last realtime reading counts when it is newer than the daily snapshot.
+        Some(Realtime::Unavailable {
+            last: Some((balance, at)),
+            ..
+        }) if clock::rfc3339_to_dhaka(at).get(..10) > b.reading_time.get(..10) => *balance,
         _ => b.balance,
     };
     let icon = if effective < card.threshold {
@@ -890,5 +895,89 @@ mod label_style_tests {
                 assert!(display_width(line) <= MAX_LINE_WIDTH, "too wide: '{line}'");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod realtime_card_tests {
+    use super::*;
+    use crate::domain::Backend;
+
+    fn balance(amount: f64, reading: &str) -> Balance {
+        Balance {
+            account_no: "41167730".to_string(),
+            meter_no: "030119013825".to_string(),
+            balance: amount,
+            month_consumption: None,
+            reading_time: reading.to_string(),
+            backend: Backend::Unified,
+        }
+    }
+
+    fn card_text(b: &Balance, realtime: &Realtime) -> String {
+        whatsapp_card(
+            &CardData {
+                unit_name: "41167730 (Meter 825)",
+                threshold: 150.0,
+                balance: b,
+                info: None,
+                realtime: Some(realtime),
+            },
+            false,
+        )
+    }
+
+    #[test]
+    fn fresh_reading_leads_the_card_and_sets_the_colour() {
+        let text = card_text(
+            &balance(94.83, "2026-11-15"),
+            &Realtime::Fresh {
+                balance: 971.11,
+                received_at: "2026-11-16T00:09:13.056Z".to_string(),
+            },
+        );
+        assert!(
+            text.contains("🟢 *Realtime balance:* *971.11 BDT*"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Read from the meter at 2026-11-16 06:09"),
+            "{text}"
+        );
+        assert!(text.contains("*Daily snapshot:* 94.83 BDT"), "{text}");
+    }
+
+    #[test]
+    fn unavailable_realtime_is_explained_gently_and_keeps_the_snapshot() {
+        let text = card_text(
+            &balance(94.83, "2026-11-15"),
+            &Realtime::Unavailable {
+                reason: "the meter is offline".to_string(),
+                last: None,
+            },
+        );
+        assert!(text.contains("94.83 BDT* (daily snapshot)"), "{text}");
+        assert!(
+            text.contains("not possible this time: the meter is offline"),
+            "{text}"
+        );
+        assert!(
+            text.contains("🔴"),
+            "no newer reading, so the snapshot decides"
+        );
+    }
+
+    #[test]
+    fn a_newer_last_realtime_reading_decides_the_colour_but_an_older_one_does_not() {
+        let newer = Realtime::Unavailable {
+            reason: "limit used".to_string(),
+            last: Some((971.11, "2026-11-16T00:09:13Z".to_string())),
+        };
+        assert!(card_text(&balance(94.83, "2026-11-15"), &newer).contains("🟢"));
+        let older = Realtime::Unavailable {
+            reason: "limit used".to_string(),
+            last: Some((971.11, "2026-11-10T00:09:13Z".to_string())),
+        };
+        assert!(card_text(&balance(94.83, "2026-11-15"), &older).contains("🔴"));
     }
 }
