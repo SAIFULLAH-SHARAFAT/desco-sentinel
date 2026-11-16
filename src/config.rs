@@ -11,7 +11,9 @@ use std::time::Duration;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::desco_api::Credentials;
 use crate::domain::{AccountNo, Backend, Bdt, DomainError, Identifier, MeterNo};
+use crate::formatter::LabelStyle;
 
 pub const DEFAULT_METERS_PATH: &str = "config/meters.json";
 
@@ -291,6 +293,19 @@ pub struct Settings {
     pub request_timeout: Duration,
     pub base_url: String,
     pub insecure_tls: bool,
+    /// `LABEL_STYLE=account` (default): `41167724 (Mother Meter)`; `name`: `Mother Meter`.
+    pub label_style: LabelStyle,
+    /// Ask the meter for a realtime balance when someone looks up one meter (`REALTIME_ON_LOOKUP`).
+    pub realtime_on_lookup: bool,
+    /// How long to wait for the meter to answer (`REALTIME_WAIT_SECS`, the portal gives up at 60).
+    pub realtime_wait: Duration,
+    /// Pause between status checks while waiting (`REALTIME_POLL_MS`).
+    pub realtime_poll: Duration,
+    /// A lookup matching more meters than this skips realtime, to save the daily limit.
+    pub realtime_max_meters: usize,
+    /// DESCO portal login (`DESCO_USERNAME` + `DESCO_PASSWORD`). `Credentials` hides the
+    /// password in `Debug` output.
+    pub credentials: Option<Credentials>,
     pub provider: Provider,
     pub notify_tenants: bool,
     pub state_dir: PathBuf,
@@ -331,6 +346,35 @@ impl Settings {
                 .trim_end_matches('/')
                 .to_string(),
             insecure_tls: env.flag("DESCO_INSECURE_TLS"),
+            realtime_on_lookup: env
+                .get("REALTIME_ON_LOOKUP")
+                .is_none_or(|_| env.flag("REALTIME_ON_LOOKUP")),
+            realtime_wait: secs("REALTIME_WAIT_SECS", 45)?,
+            realtime_poll: millis("REALTIME_POLL_MS", 2000)?,
+            realtime_max_meters: env.parse("REALTIME_MAX_METERS", 2)?,
+            label_style: match env.get("LABEL_STYLE") {
+                None => LabelStyle::default(),
+                Some(raw) => LabelStyle::parse(raw).ok_or_else(|| ConfigError::BadSetting {
+                    key: "LABEL_STYLE".to_string(),
+                    value: raw.to_string(),
+                })?,
+            },
+            credentials: match (env.get("DESCO_USERNAME"), env.get("DESCO_PASSWORD")) {
+                (Some(user), Some(pass)) => Some(Credentials::new(user.trim(), pass)),
+                (None, None) => None,
+                (Some(_), None) => {
+                    return Err(ConfigError::BadSetting {
+                        key: "DESCO_PASSWORD".to_string(),
+                        value: "(missing: DESCO_USERNAME is set)".to_string(),
+                    });
+                }
+                (None, Some(_)) => {
+                    return Err(ConfigError::BadSetting {
+                        key: "DESCO_USERNAME".to_string(),
+                        value: "(missing: DESCO_PASSWORD is set)".to_string(),
+                    });
+                }
+            },
             provider: Provider::parse(env.get_or("NOTIFY_PROVIDER", "console"))?,
             notify_tenants: env.flag("NOTIFY_TENANTS"),
             state_dir: PathBuf::from(env.get_or("STATE_DIR", "state")),

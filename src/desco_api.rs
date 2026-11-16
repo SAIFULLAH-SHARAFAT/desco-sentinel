@@ -1,6 +1,15 @@
 //! DESCO prepaid API client.
 //!
-//! Behaviour verified against the live service:
+//! Since 6 Nov 2026 the portal needs a customer sign-in. With credentials configured
+//! (`DESCO_USERNAME` / `DESCO_PASSWORD`) the client works against the signed-in portal API:
+//! `POST /auth/login` (cookie session plus XSRF header), `GET /accounts` to learn the
+//! internal account ids, then `/accounts/{id}/balance|summary|transactions|usage/monthly`.
+//! Only accounts linked to that portal login can be read. The session is renewed
+//! automatically when it expires.
+//!
+//! Without credentials the old public endpoints are used (they now answer 401).
+//!
+//! Behaviour of the old public API, verified against the live service:
 //! * Two backends (`unified`, `tkdes`). A meter normally exists on only one.
 //! * "Not found" comes back as HTTP 200 with `data: null` (unified getBalance) or with
 //!   codes such as 16001 / 16002, so the fallback rule is "code != 200 or data is null".
@@ -10,11 +19,14 @@
 
 use std::error::Error as _;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use reqwest::blocking::Client;
-use serde_json::Value;
+use reqwest::blocking::{Client, RequestBuilder};
+use reqwest::cookie::{CookieStore, Jar};
+use reqwest::{Method, Url};
+use serde_json::{Value, json};
 use thiserror::Error;
 use tracing::{debug, warn};
 
@@ -28,6 +40,8 @@ pub enum ApiError {
     Http(u16),
     #[error("DESCO requires sign-in (HTTP {0})")]
     AuthRequired(u16),
+    #[error("DESCO sign-in failed: {0}")]
+    LoginFailed(String),
     #[error("unexpected response: {0}")]
     Malformed(String),
     #[error("meter not found on any backend: {desc} (code {code})")]
@@ -39,7 +53,8 @@ impl ApiError {
     #[must_use]
     pub fn user_message(&self) -> String {
         match self {
-            Self::AuthRequired(_) => "DESCO's customer portal now asks for a sign-in, so balances cannot be read automatically any more.".to_string(),
+            Self::AuthRequired(_) => "DESCO's customer portal asks for a sign-in. Set DESCO_USERNAME and DESCO_PASSWORD so balances can be read.".to_string(),
+            Self::LoginFailed(why) => format!("Could not sign in to the DESCO portal: {why}."),
             Self::Network(_) => "DESCO's server could not be reached.".to_string(),
             Self::Http(code) => format!("DESCO's server answered with an error (HTTP {code})."),
             Self::Malformed(_) => "DESCO's answer was not in the expected format.".to_string(),
@@ -84,6 +99,11 @@ fn text_field(v: &Value, key: &str) -> Option<String> {
     }
 }
 
+/// `true` only for an explicit JSON `true` (the portal marks bad readings this way).
+fn flag(v: &Value, key: &str) -> bool {
+    v.get(key).and_then(Value::as_bool) == Some(true)
+}
+
 fn number_field(v: &Value, key: &str) -> Option<f64> {
     match v.get(key)? {
         Value::Number(n) => n.as_f64(),
@@ -110,7 +130,9 @@ pub fn parse_balance(data: &Value, backend: Backend) -> Result<Balance, ApiError
         account_no: text_field(data, "accountNo").unwrap_or_default(),
         meter_no: text_field(data, "meterNo").unwrap_or_default(),
         balance,
-        month_consumption: number_field(data, "currentMonthConsumption"),
+        // Old API: currentMonthConsumption. Signed-in portal: currentMonthConsumedTaka.
+        month_consumption: number_field(data, "currentMonthConsumption")
+            .or_else(|| number_field(data, "currentMonthConsumedTaka")),
         reading_time: text_field(data, "readingTime").unwrap_or_default(),
         backend,
     })
@@ -177,7 +199,8 @@ pub fn parse_recharges(data: &Value) -> Result<Vec<Recharge>, ApiError> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonthUsage {
     pub month: String,
-    pub units_kwh: f64,
+    /// `None` when the portal has no usable reading (missing, or flagged as excluded).
+    pub units_kwh: Option<f64>,
     pub taka: f64,
     pub max_demand: Option<f64>,
 }
@@ -191,13 +214,147 @@ pub fn parse_monthly(data: &Value) -> Result<Vec<MonthUsage>, ApiError> {
         .iter()
         .map(|item| MonthUsage {
             month: text_field(item, "month").unwrap_or_default(),
-            units_kwh: number_field(item, "consumedUnit").unwrap_or(0.0),
+            units_kwh: number_field(item, "consumedUnit")
+                .filter(|_| !flag(item, "consumedUnitExcluded")),
             taka: number_field(item, "consumedTaka").unwrap_or(0.0),
-            max_demand: number_field(item, "maximumDemand"),
+            max_demand: number_field(item, "maximumDemand")
+                .filter(|_| !flag(item, "maximumDemandExcluded")),
         })
         .collect();
     out.sort_by(|a, b| b.month.cmp(&a.month));
     Ok(out)
+}
+
+fn portal_backend(data: &Value) -> Backend {
+    text_field(data, "meterType")
+        .and_then(|t| Backend::parse(&t).ok())
+        .unwrap_or(Backend::Unified)
+}
+
+/// Result of asking the meter for its balance right now.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Realtime {
+    /// Read from the meter just now. `received_at` is the portal's RFC 3339 time (UTC).
+    Fresh { balance: f64, received_at: String },
+    /// No fresh reading. `reason` is a short lowercase phrase for people; `last` is the most
+    /// recent realtime reading the portal still has (balance, RFC 3339 time).
+    Unavailable {
+        reason: String,
+        last: Option<(f64, String)>,
+    },
+}
+
+impl Realtime {
+    fn unavailable(reason: &str, last: Option<(f64, String)>) -> Self {
+        Self::Unavailable {
+            reason: reason.trim().trim_end_matches('.').to_string(),
+            last,
+        }
+    }
+}
+
+/// A random-looking UUID (version 4 layout) that is unique per call. The portal uses it to
+/// recognise a repeated request, so retrying a failed POST cannot use up a second attempt.
+fn idempotency_key() -> String {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::AtomicU64;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let seed = format!(
+        "{nanos}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let digest = Sha256::digest(seed.as_bytes());
+    let mut b = [0_u8; 16];
+    b.copy_from_slice(&digest[..16]);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let hex = b.iter().fold(String::new(), |mut acc, x| {
+        acc.push_str(&format!("{x:02x}"));
+        acc
+    });
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// Portal sign-in credentials. The password never appears in `Debug` output.
+#[derive(Clone)]
+pub struct Credentials {
+    username: String,
+    password: String,
+}
+
+impl Credentials {
+    pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
+        Self {
+            username: username.into(),
+            password: password.into(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("username", &self.username)
+            .field("password", &"<hidden>")
+            .finish()
+    }
+}
+
+/// One account linked to the portal login, as listed by `GET /accounts`.
+#[derive(Debug, Clone)]
+struct PortalAccount {
+    id: i64,
+    account_no: String,
+    meter_no: String,
+}
+
+/// Reads the `GET /accounts` answer: `{"accounts":[{accountId, accountNo, meterNo, ...}]}`.
+/// Entries that are not active links are skipped.
+fn parse_portal_accounts(body: &Value) -> Vec<PortalAccount> {
+    body.get("accounts")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|a| {
+                    text_field(a, "linkStatus").is_none_or(|s| s.eq_ignore_ascii_case("ACTIVE"))
+                })
+                .filter_map(|a| {
+                    Some(PortalAccount {
+                        id: a.get("accountId")?.as_i64()?,
+                        account_no: text_field(a, "accountNo")?,
+                        meter_no: text_field(a, "meterNo").unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[derive(Default)]
+struct PortalState {
+    logged_in: bool,
+    accounts: Vec<PortalAccount>,
+}
+
+struct Portal {
+    credentials: Credentials,
+    base: Url,
+    jar: Arc<Jar>,
+    state: Mutex<PortalState>,
 }
 
 pub struct DescoClient {
@@ -206,6 +363,8 @@ pub struct DescoClient {
     base_url: String,
     retries: u32,
     use_insecure: AtomicBool,
+    cookie_jar: Arc<Jar>,
+    portal: Option<Portal>,
 }
 
 enum Attempt {
@@ -238,8 +397,10 @@ impl DescoClient {
         retries: u32,
         insecure_tls: bool,
     ) -> Result<Self, ApiError> {
+        let cookie_jar = Arc::new(Jar::default());
         let build = |accept_invalid: bool| {
             Client::builder()
+                .cookie_provider(Arc::clone(&cookie_jar))
                 .timeout(timeout)
                 .user_agent(concat!("desco-sentinel/", env!("CARGO_PKG_VERSION")))
                 .danger_accept_invalid_certs(accept_invalid)
@@ -252,28 +413,55 @@ impl DescoClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             retries,
             use_insecure: AtomicBool::new(insecure_tls),
+            cookie_jar,
+            portal: None,
         })
     }
 
-    fn attempt(&self, url: &str, params: &[(&str, &str)]) -> Result<Value, Attempt> {
+    /// Switches to the signed-in portal API. The login happens lazily on the first request.
+    pub fn with_credentials(mut self, credentials: Credentials) -> Result<Self, ApiError> {
+        let base = Url::parse(&format!("{}/", self.base_url))
+            .map_err(|e| ApiError::Malformed(format!("bad DESCO_BASE_URL: {e}")))?;
+        self.portal = Some(Portal {
+            credentials,
+            base,
+            jar: Arc::clone(&self.cookie_jar),
+            state: Mutex::new(PortalState::default()),
+        });
+        Ok(self)
+    }
+
+    fn attempt(
+        &self,
+        method: &Method,
+        url: &str,
+        params: &[(&str, &str)],
+        body: Option<&Value>,
+        xsrf: Option<&str>,
+    ) -> Result<Value, Attempt> {
         let client = if self.use_insecure.load(Ordering::Relaxed) {
             &self.insecure
         } else {
             &self.strict
         };
-        let response = client
-            .get(url)
+        let mut request: RequestBuilder = client
+            .request(method.clone(), url)
             .header("Accept", "application/json, text/plain, */*")
-            .query(params)
-            .send()
-            .map_err(|e| {
-                let api_err = ApiError::Network(e.to_string());
-                if is_cert_error(&e) {
-                    Attempt::CertProblem(api_err)
-                } else {
-                    Attempt::Retry(api_err)
-                }
-            })?;
+            .query(params);
+        if let Some(token) = xsrf {
+            request = request.header("X-XSRF-TOKEN", token);
+        }
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request.send().map_err(|e| {
+            let api_err = ApiError::Network(e.to_string());
+            if is_cert_error(&e) {
+                Attempt::CertProblem(api_err)
+            } else {
+                Attempt::Retry(api_err)
+            }
+        })?;
 
         let status = response.status();
         if status.is_server_error() {
@@ -287,6 +475,9 @@ impl DescoClient {
         if !status.is_success() {
             return Err(Attempt::Fatal(ApiError::Http(status.as_u16())));
         }
+        if status == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Value::Null);
+        }
         response
             .json::<Value>()
             .map_err(|e| Attempt::Fatal(ApiError::Malformed(e.to_string())))
@@ -294,10 +485,21 @@ impl DescoClient {
 
     /// GET with retry and exponential backoff on timeouts and 5xx answers.
     fn get_json(&self, url: &str, params: &[(&str, &str)]) -> Result<Value, ApiError> {
+        self.send_json(&Method::GET, url, params, None, None)
+    }
+
+    fn send_json(
+        &self,
+        method: &Method,
+        url: &str,
+        params: &[(&str, &str)],
+        body: Option<&Value>,
+        xsrf: Option<&str>,
+    ) -> Result<Value, ApiError> {
         let mut tries_left = self.retries;
         let mut delay = Duration::from_millis(500);
         loop {
-            match self.attempt(url, params) {
+            match self.attempt(method, url, params, body, xsrf) {
                 Ok(value) => return Ok(value),
                 Err(Attempt::Fatal(e)) => return Err(e),
                 Err(Attempt::CertProblem(e)) => {
@@ -314,6 +516,266 @@ impl DescoClient {
                     warn!(error = %e, ?delay, "request failed, retrying");
                     thread::sleep(delay);
                     delay *= 2;
+                }
+            }
+        }
+    }
+
+    // ---- signed-in portal API -------------------------------------------------------
+
+    fn portal_url(portal: &Portal, path: &str) -> String {
+        format!("{}{}", portal.base, path.trim_start_matches('/'))
+    }
+
+    fn xsrf_token(portal: &Portal) -> Option<String> {
+        let header = portal.jar.cookies(&portal.base)?;
+        header.to_str().ok()?.split(';').find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name == "XSRF-TOKEN").then(|| value.to_string())
+        })
+    }
+
+    /// Signs in and loads the list of linked accounts. Caller holds the state lock.
+    fn portal_login(&self, portal: &Portal, state: &mut PortalState) -> Result<(), ApiError> {
+        state.logged_in = false;
+        // The csrf call hands out the XSRF cookie that the login must echo in a header.
+        self.get_json(&Self::portal_url(portal, "auth/csrf"), &[])?;
+        let token = Self::xsrf_token(portal);
+        let body = json!({
+            "username": portal.credentials.username,
+            "password": portal.credentials.password,
+        });
+        let reply = self
+            .send_json(
+                &Method::POST,
+                &Self::portal_url(portal, "auth/login"),
+                &[],
+                Some(&body),
+                token.as_deref(),
+            )
+            .map_err(|e| match e {
+                ApiError::AuthRequired(_) => {
+                    ApiError::LoginFailed("DESCO rejected the username or password".to_string())
+                }
+                ApiError::Http(423) => {
+                    ApiError::LoginFailed("the DESCO login is locked".to_string())
+                }
+                ApiError::Http(429) => {
+                    ApiError::LoginFailed("too many sign-in attempts, try again later".to_string())
+                }
+                other => other,
+            })?;
+        if reply.get("authenticated").and_then(Value::as_bool) != Some(true) {
+            return Err(ApiError::LoginFailed(
+                "the portal did not confirm the sign-in".to_string(),
+            ));
+        }
+        if reply.get("mustChangePassword").and_then(Value::as_bool) == Some(true) {
+            return Err(ApiError::LoginFailed(
+                "DESCO asks for a password change; do it once on the portal".to_string(),
+            ));
+        }
+        state.accounts = self.portal_load_accounts(portal)?;
+        state.logged_in = true;
+        debug!(
+            accounts = state.accounts.len(),
+            "signed in to the DESCO portal"
+        );
+        Ok(())
+    }
+
+    fn portal_load_accounts(&self, portal: &Portal) -> Result<Vec<PortalAccount>, ApiError> {
+        let body = self.get_json(&Self::portal_url(portal, "accounts"), &[])?;
+        Ok(parse_portal_accounts(&body))
+    }
+
+    /// Finds the internal id for an identifier. Logs in first when needed and refreshes the
+    /// account list once if the number is not known yet.
+    fn portal_account(&self, portal: &Portal, id: &Identifier) -> Result<PortalAccount, ApiError> {
+        let mut state = portal.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if !state.logged_in {
+            self.portal_login(portal, &mut state)?;
+        }
+        let find = |accounts: &[PortalAccount]| {
+            accounts
+                .iter()
+                .find(|a| match id {
+                    Identifier::Account(n) => a.account_no == n.as_str(),
+                    Identifier::Meter(n) => a.meter_no == n.as_str(),
+                })
+                .cloned()
+        };
+        if let Some(found) = find(&state.accounts) {
+            return Ok(found);
+        }
+        state.accounts = self.portal_load_accounts(portal)?;
+        find(&state.accounts).ok_or_else(|| ApiError::NotFound {
+            code: 404,
+            desc: format!(
+                "{} is not linked to the DESCO portal login (link it on the portal's Accounts page)",
+                id.query_pair().1
+            ),
+        })
+    }
+
+    /// One portal request. Non-GET calls echo the XSRF cookie in a header. If the session has
+    /// expired the client signs in again once and repeats the request.
+    fn portal_call(
+        &self,
+        portal: &Portal,
+        method: &Method,
+        path: &str,
+        params: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> Result<Value, ApiError> {
+        let url = Self::portal_url(portal, path);
+        let run = || {
+            let xsrf = if *method == Method::GET {
+                None
+            } else {
+                Self::xsrf_token(portal)
+            };
+            self.send_json(method, &url, params, body, xsrf.as_deref())
+        };
+        match run() {
+            Err(ApiError::AuthRequired(_)) => {
+                {
+                    let mut state = portal.state.lock().unwrap_or_else(PoisonError::into_inner);
+                    self.portal_login(portal, &mut state)?;
+                }
+                run()
+            }
+            other => other,
+        }
+    }
+
+    /// GET `/accounts/{id}/{suffix}` for the account behind `id`.
+    fn portal_get(
+        &self,
+        portal: &Portal,
+        id: &Identifier,
+        suffix: &str,
+        params: &[(&str, &str)],
+    ) -> Result<Value, ApiError> {
+        let account = self.portal_account(portal, id)?;
+        self.portal_call(
+            portal,
+            &Method::GET,
+            &format!("accounts/{}/{suffix}", account.id),
+            params,
+            None,
+        )
+    }
+
+    /// Reads the balance straight from the meter, like the portal's "Get realtime balance"
+    /// button. The portal allows only a few requests per meter per day, so the read-only
+    /// summary is checked first: when the meter is not `AVAILABLE` no request is made (no
+    /// attempt is used up) and the last realtime reading is returned instead. `wait` is how
+    /// long to wait for the meter to answer; `poll` is the pause between status checks.
+    pub fn realtime_balance(
+        &self,
+        id: &Identifier,
+        wait: Duration,
+        poll: Duration,
+    ) -> Result<Realtime, ApiError> {
+        let Some(portal) = &self.portal else {
+            return Ok(Realtime::unavailable(
+                "realtime balance needs the DESCO portal login (DESCO_USERNAME / DESCO_PASSWORD)",
+                None,
+            ));
+        };
+        let account = self.portal_account(portal, id)?;
+        let summary =
+            self.portal_call(portal, &Method::GET, "accounts/realtime-balance", &[], None)?;
+        if summary.get("enabled").and_then(Value::as_bool) == Some(false) {
+            return Ok(Realtime::unavailable(
+                "DESCO has switched realtime balance off",
+                None,
+            ));
+        }
+        let entry = summary
+            .get("meters")
+            .and_then(Value::as_array)
+            .and_then(|meters| {
+                meters
+                    .iter()
+                    .find(|m| m.get("accountId").and_then(Value::as_i64) == Some(account.id))
+            });
+        let Some(entry) = entry else {
+            return Ok(Realtime::unavailable(
+                "DESCO does not offer realtime balance for this meter",
+                None,
+            ));
+        };
+        let last = number_field(entry, "lastRealtimeBalance").map(|b| {
+            (
+                b,
+                text_field(entry, "lastRealtimeReceivedAt").unwrap_or_default(),
+            )
+        });
+        if text_field(entry, "status").as_deref() != Some("AVAILABLE") {
+            let reason = text_field(entry, "message")
+                .unwrap_or_else(|| "realtime balance is not available right now".to_string());
+            return Ok(Realtime::unavailable(&reason, last));
+        }
+
+        let base = format!("accounts/{}/realtime-balance", account.id);
+        let body = json!({ "idempotencyKey": idempotency_key() });
+        let mut current = self.portal_call(portal, &Method::POST, &base, &[], Some(&body))?;
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            let status = text_field(&current, "status").unwrap_or_default();
+            match status.as_str() {
+                "SUCCESS" => {
+                    let balance = number_field(&current, "balance").ok_or_else(|| {
+                        ApiError::Malformed("realtime answer has no 'balance'".to_string())
+                    })?;
+                    return Ok(Realtime::Fresh {
+                        balance,
+                        received_at: text_field(&current, "receivedAt").unwrap_or_default(),
+                    });
+                }
+                "IN_PROGRESS" => {
+                    let request_id = text_field(&current, "requestId")
+                        .filter(|r| {
+                            r.chars()
+                                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                        })
+                        .ok_or_else(|| {
+                            ApiError::Malformed(
+                                "realtime request has no usable requestId".to_string(),
+                            )
+                        })?;
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(Realtime::unavailable(
+                            &format!(
+                                "the meter did not answer within {} seconds; try again in a minute",
+                                wait.as_secs()
+                            ),
+                            last,
+                        ));
+                    }
+                    thread::sleep(poll);
+                    current = self.portal_call(
+                        portal,
+                        &Method::GET,
+                        &format!("{base}/{request_id}"),
+                        &[],
+                        None,
+                    )?;
+                }
+                other => {
+                    let reason = text_field(&current, "message").unwrap_or_else(|| match other {
+                        "OFFLINE" => "the meter is offline".to_string(),
+                        "TIMEOUT" | "UPSTREAM_FAILURE" => {
+                            "the meter did not respond in time".to_string()
+                        }
+                        "DAILY_LIMIT_REACHED" | "COOLDOWN_ACTIVE" => {
+                            "the realtime limit for this meter is used up for now".to_string()
+                        }
+                        _ => format!("the portal answered {other}"),
+                    });
+                    return Ok(Realtime::unavailable(&reason, last));
                 }
             }
         }
@@ -362,6 +824,10 @@ impl DescoClient {
         id: &Identifier,
         hint: Option<Backend>,
     ) -> Result<CustomerInfo, ApiError> {
+        if let Some(portal) = &self.portal {
+            let data = self.portal_get(portal, id, "summary", &[])?;
+            return Ok(parse_customer_info(&data, portal_backend(&data)));
+        }
         let reply = self.call("getCustomerInfo", id, hint, &[])?;
         Ok(parse_customer_info(&reply.data, reply.backend))
     }
@@ -369,6 +835,10 @@ impl DescoClient {
     /// Current balance. If a meter number is not accepted by `getBalance` on either backend,
     /// the account number is resolved through `getCustomerInfo` and the call is retried.
     pub fn balance(&self, id: &Identifier, hint: Option<Backend>) -> Result<Balance, ApiError> {
+        if let Some(portal) = &self.portal {
+            let data = self.portal_get(portal, id, "balance", &[])?;
+            return parse_balance(&data, portal_backend(&data));
+        }
         match self.call("getBalance", id, hint, &[]) {
             Ok(reply) => parse_balance(&reply.data, reply.backend),
             Err(ApiError::NotFound { .. }) if matches!(id, Identifier::Meter(_)) => {
@@ -394,6 +864,15 @@ impl DescoClient {
         date_from: &str,
         date_to: &str,
     ) -> Result<Vec<Recharge>, ApiError> {
+        if let Some(portal) = &self.portal {
+            let data = self.portal_get(
+                portal,
+                id,
+                "transactions",
+                &[("dateFrom", date_from), ("dateTo", date_to)],
+            )?;
+            return parse_recharges(&data);
+        }
         let reply = self.call(
             "getRechargeHistory",
             id,
@@ -410,6 +889,15 @@ impl DescoClient {
         month_from: &str,
         month_to: &str,
     ) -> Result<Vec<MonthUsage>, ApiError> {
+        if let Some(portal) = &self.portal {
+            let data = self.portal_get(
+                portal,
+                id,
+                "usage/monthly",
+                &[("monthFrom", month_from), ("monthTo", month_to)],
+            )?;
+            return parse_monthly(&data);
+        }
         let reply = self.call(
             "getCustomerMonthlyConsumption",
             id,

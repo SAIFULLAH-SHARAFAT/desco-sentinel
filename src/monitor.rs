@@ -10,9 +10,9 @@ use tracing::{info, warn};
 
 use crate::clock;
 use crate::config::{Meter, Settings};
-use crate::desco_api::{ApiError, Balance, CustomerInfo, DescoClient};
+use crate::desco_api::{ApiError, Balance, CustomerInfo, DescoClient, Realtime};
 use crate::domain::{AccountNo, Backend, Identifier, Last3, MeterNo};
-use crate::formatter::{alert_message, outage_notice, recovery_notice};
+use crate::formatter::{alert_message, outage_notice, recovery_notice, titled};
 use crate::notifier::Notifier;
 use crate::state::{
     AlertState, Decision, Identity, IdentityCache, alert_state_path, identity_cache_path,
@@ -162,6 +162,31 @@ impl Monitor {
 
     pub fn balance(&self, meter: &Meter, max_age: Duration) -> Result<Balance, ApiError> {
         self.balance_inner(meter, max_age).0
+    }
+
+    /// Realtime balance read from the meter itself (uses one of the portal's few daily
+    /// attempts). Never fails: problems become `Realtime::Unavailable` with a reason.
+    pub fn realtime(&self, meter: &Meter) -> Realtime {
+        let Some((id, _)) = self.identifier(meter) else {
+            return Realtime::Unavailable {
+                reason: "meter has no identifier".to_string(),
+                last: None,
+            };
+        };
+        match self.api.realtime_balance(
+            &id,
+            self.settings.realtime_wait,
+            self.settings.realtime_poll,
+        ) {
+            Ok(realtime) => realtime,
+            Err(e) => {
+                warn!(unit = %meter.unit_name, error = %e, "realtime balance failed");
+                Realtime::Unavailable {
+                    reason: e.user_message().trim_end_matches('.').to_lowercase(),
+                    last: None,
+                }
+            }
+        }
     }
 
     /// Customer info, cached for `info_cache_ttl` (it rarely changes).
@@ -327,7 +352,11 @@ impl Monitor {
                     let follow_up = decision == Decision::AlertFollowUp;
                     let previous = state.get(key).map(|e| e.last_alerted_balance);
                     let alert = alert_message(
-                        &meter.unit_name,
+                        &titled(
+                            self.settings.label_style,
+                            &balance.account_no,
+                            &meter.unit_name,
+                        ),
                         meter.threshold.0,
                         &balance,
                         follow_up,

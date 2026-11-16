@@ -23,6 +23,10 @@ cargo run --release -- check --dry-run             # print the alerts that would
 
 `config/meters.json`, `.env` and `state/` are git-ignored.
 
+### Labels
+
+Messages name a meter by its account number with the unit name in brackets, for example `41167724 (Mother Meter)`. Set `LABEL_STYLE=name` to get the unit name only (the original layout with a separate `Acc#` column). In the narrow tables the bracketed name is shortened to fit a phone screen; cards and alerts show it in full.
+
 ### Meter list
 
 ```json
@@ -69,6 +73,29 @@ For GitHub Actions, put the whole array in a secret named `DESCO_METERS_JSON`. I
 | `421` (3 digits) | Card for every meter whose account **or** meter number ends in 421 |
 | `1A`, `lift` | Card for the matching unit(s) |
 | `help`, anything else | Command menu |
+
+## Realtime balance
+
+The daily balance is a snapshot taken at midnight. Like the portal's **Get realtime balance** button, a lookup of one meter (last 3 digits such as `825`, or a unit name) also asks the meter itself and shows the answer on the card:
+
+```
+🟢 Realtime balance: 971.11 BDT
+⚡ Read from the meter at 2026-11-16 06:09
+📅 Daily snapshot: 94.83 BDT
+```
+
+- The portal allows only a few realtime requests per meter per day. The bot looks at the portal's summary first, and if the limit is used up it makes **no request**: it shows the daily snapshot and the last realtime reading, with a short explanation.
+- A meter that is offline or does not answer within `REALTIME_WAIT_SECS` gives a polite note instead of an error.
+- Lookups matching more than `REALTIME_MAX_METERS` meters skip it, so one broad message cannot use up every meter's attempts. `status`, `low` and the scheduled alerts never request realtime balances.
+- Turn it off with `REALTIME_ON_LOOKUP=false`. Needs the portal login (`DESCO_USERNAME` / `DESCO_PASSWORD`).
+
+## Security
+
+- **Nothing secret is stored in the repository.** `.env`, `config/meters.json` and `state/` are git-ignored. Keep the repository **private**.
+- **Where secrets live:** GitHub Actions secrets (`DESCO_USERNAME`, `DESCO_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `DESCO_METERS_JSON`) and Cloudflare Worker secrets (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `ALLOWED_CHATS`, `GITHUB_TOKEN`). Both platforms encrypt them at rest and hide them in logs.
+- The DESCO password is held only in memory, is hidden from `Debug` output and error messages, and is sent only to the portal over HTTPS.
+- The relay answers only chats listed in `ALLOWED_CHATS`, and only requests carrying Telegram's secret header.
+- If a token or password was ever pasted into a chat, a ticket or a commit, treat it as leaked: revoke or change it and update the secrets.
 
 ## Weekly report
 
@@ -166,7 +193,9 @@ If a check cannot read **any** meter, nobody can be warned about low balances, s
 - The scheduled check sends one message to the alert recipients when readings stop, and one when they return. It does not repeat while the problem lasts.
 - In the Actions log the cause is the `error=` text, for example `HTTP 401 from DESCO`.
 
-Since 6 November 2026 DESCO's portal answers `401 AUTHENTICATION_REQUIRED` to the public endpoints this tool used, because it introduced customer sign-in (login, one-time codes sent to the account holder's mobile). Until DESCO offers an official way to read several accounts, or the tool is adapted to it, balances cannot be read automatically.
+Since 6 November 2026 DESCO's portal answers `401 AUTHENTICATION_REQUIRED` to its old public endpoints, because it introduced customer sign-in. The tool now signs in the way the website does. Set `DESCO_USERNAME` (the phone or email you registered with) and `DESCO_PASSWORD` in `.env`, or as GitHub secrets of the same names. Without them the error reads "DESCO's customer portal asks for a sign-in".
+
+**Every meter you monitor must be linked to that portal login** (portal, Accounts, "Link a new account"; up to 20 per login). A meter that is not linked is reported as not found. A wrong password shows as "Could not sign in to the DESCO portal"; the password is never printed or logged. If you change the password on the portal, update the secret too.
 
 ## How alerts work
 
@@ -180,7 +209,7 @@ A failed delivery is not recorded, so the next run retries it. Meters push readi
 
 ## DESCO API notes
 
-The portal's public JSON API is used without login. Behaviour this project relies on, checked against the live service:
+Signed in, the client uses `POST /api/auth/login` (after `GET /api/auth/csrf`, echoing the `XSRF-TOKEN` cookie in an `X-XSRF-TOKEN` header), then `GET /api/accounts` for the internal account ids and `/api/accounts/{id}/balance`, `/summary`, `/transactions`, `/usage/monthly`. The 12-hour session cookie is renewed automatically. The notes below describe the old public API, which is still used when no credentials are set:
 
 - Two back ends, `unified` and `tkdes`. A meter normally exists on one. "Not found" arrives as HTTP 200 with `data: null` or with codes such as `16001` / `16002`, so the fallback rule is "code is not 200 or data is null", then try the other back end.
 - Send exactly one of `accountNo` / `meterNo`. A 12-digit value is a meter number; passing a mismatched pair returns no data. `DESCO-` prefixes are not understood by the API and are stripped.

@@ -5,8 +5,8 @@ use crate::config::Meter;
 use crate::desco_api::Balance;
 use crate::domain::Last3;
 use crate::formatter::{
-    CardData, InfoRow, StatusRow, help_text, unreadable_message, whatsapp_card, whatsapp_info,
-    whatsapp_low, whatsapp_status,
+    CardData, InfoRow, StatusRow, help_text, titled, unreadable_message, whatsapp_card,
+    whatsapp_info, whatsapp_low_styled, whatsapp_status_styled,
 };
 use crate::monitor::Monitor;
 
@@ -132,10 +132,14 @@ fn status_reply(monitor: &Monitor, only_low: bool) -> String {
         })
         .collect();
     if only_low {
-        whatsapp_low(&rows, &synced_now())
+        whatsapp_low_styled(&rows, &synced_now(), settings_style(monitor))
     } else {
-        whatsapp_status(&rows, &synced_now())
+        whatsapp_status_styled(&rows, &synced_now(), settings_style(monitor))
     }
+}
+
+fn settings_style(monitor: &Monitor) -> crate::formatter::LabelStyle {
+    monitor.settings().label_style
 }
 
 /// Account number when known, otherwise the meter number.
@@ -196,6 +200,8 @@ fn cards_reply(monitor: &Monitor, meters: &[&Meter], show_pii: bool) -> String {
         return out;
     }
     let settings = monitor.settings();
+    // Realtime uses one of the few daily attempts per meter, so only for focused lookups.
+    let want_realtime = settings.realtime_on_lookup && meters.len() <= settings.realtime_max_meters;
     let cards: Vec<String> = meters
         .iter()
         .map(
@@ -206,12 +212,18 @@ fn cards_reply(monitor: &Monitor, meters: &[&Meter], show_pii: bool) -> String {
                 ),
                 Ok(balance) => {
                     let info = monitor.info(meter).ok();
+                    let realtime = want_realtime.then(|| monitor.realtime(meter));
                     whatsapp_card(
                         &CardData {
-                            unit_name: &meter.unit_name,
+                            unit_name: &titled(
+                                settings.label_style,
+                                &balance.account_no,
+                                &meter.unit_name,
+                            ),
                             threshold: meter.threshold.0,
                             balance: &balance,
                             info: info.as_ref(),
+                            realtime: realtime.as_ref(),
                         },
                         show_pii,
                     )

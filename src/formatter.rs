@@ -3,7 +3,8 @@
 //! WhatsApp wraps long lines, so every table line inside the ``` block is kept at or below
 //! [`MAX_LINE_WIDTH`] display columns (emoji count as two).
 
-use crate::desco_api::{Balance, CustomerInfo, MonthUsage, Recharge};
+use crate::clock;
+use crate::desco_api::{Balance, CustomerInfo, MonthUsage, Realtime, Recharge};
 use crate::domain::Bdt;
 
 pub const MAX_LINE_WIDTH: usize = 34;
@@ -58,6 +59,56 @@ fn tail3(s: &str) -> String {
     format!("..{}", &s[start..])
 }
 
+/// How a meter is named in messages (`LABEL_STYLE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LabelStyle {
+    /// `41167724 (Mother Meter)`: the account number leads, the unit name is in brackets.
+    #[default]
+    Account,
+    /// `Mother Meter`: the unit name only.
+    Name,
+}
+
+impl LabelStyle {
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "account" | "account_first" => Some(Self::Account),
+            "name" | "unit" => Some(Self::Name),
+            _ => None,
+        }
+    }
+}
+
+/// Full title of a meter: `41167724 (Mother Meter)` or just the name, depending on `style`.
+/// Falls back to the name when the account number is unknown.
+#[must_use]
+pub fn titled(style: LabelStyle, account: &str, name: &str) -> String {
+    let account = account.trim();
+    if style == LabelStyle::Name || account.is_empty() || account == name.trim() {
+        return name.to_string();
+    }
+    format!("{account} ({})", name.trim())
+}
+
+/// Width of the first column of the narrow tables in [`LabelStyle::Account`].
+const ACCOUNT_CELL: usize = 18;
+
+/// `41167724 (M825)` squeezed into [`ACCOUNT_CELL`] columns: the account number is never
+/// cut, the bracketed name is shortened (and dropped if there is no room).
+fn account_cell(row: &StatusRow) -> String {
+    let number = row.number.trim();
+    if number.is_empty() {
+        return pad_right(&row.label, ACCOUNT_CELL);
+    }
+    let room = ACCOUNT_CELL.saturating_sub(display_width(number) + 3);
+    if room == 0 || row.label.trim().is_empty() || row.label.trim() == number {
+        return pad_right(number, ACCOUNT_CELL);
+    }
+    let name = pad_right(row.label.trim(), room);
+    pad_right(&format!("{number} ({})", name.trim_end()), ACCOUNT_CELL)
+}
+
 /// One row of the building status table.
 #[derive(Debug, Clone)]
 pub struct StatusRow {
@@ -87,27 +138,48 @@ impl StatusRow {
 /// Mobile-friendly status table for `all` / `status` / `table`.
 #[must_use]
 pub fn whatsapp_status(rows: &[StatusRow], synced: &str) -> String {
+    whatsapp_status_styled(rows, synced, LabelStyle::Name)
+}
+
+/// Like [`whatsapp_status`] with a chosen [`LabelStyle`].
+#[must_use]
+pub fn whatsapp_status_styled(rows: &[StatusRow], synced: &str, style: LabelStyle) -> String {
     let low = rows.iter().filter(|r| r.is_low()).count();
     let unread = rows.iter().filter(|r| r.balance.is_none()).count();
 
     let mut out = format!("⚡ *DESCO BUILDING STATUS ({})* ⚡\n{FENCE}\n", rows.len());
-    out.push_str(&format!(
-        "{} {} {} St\n",
-        pad_right("Unit", 9),
-        pad_right("Acc#", 5),
-        pad_left("Balance", 9)
-    ));
+    match style {
+        LabelStyle::Name => out.push_str(&format!(
+            "{} {} {} St\n",
+            pad_right("Unit", 9),
+            pad_right("Acc#", 5),
+            pad_left("Balance", 9)
+        )),
+        LabelStyle::Account => out.push_str(&format!(
+            "{} {} St\n",
+            pad_right("Account (Unit)", ACCOUNT_CELL),
+            pad_left("Balance", 9)
+        )),
+    }
     for row in rows {
         let balance = row
             .balance
             .map_or_else(|| "n/a".to_string(), |b| Bdt(b).to_string());
-        out.push_str(&format!(
-            "{} {} {} {}\n",
-            pad_right(&row.label, 9),
-            pad_right(&tail3(&row.number), 5),
-            pad_left(&balance, 9),
-            row.icon()
-        ));
+        match style {
+            LabelStyle::Name => out.push_str(&format!(
+                "{} {} {} {}\n",
+                pad_right(&row.label, 9),
+                pad_right(&tail3(&row.number), 5),
+                pad_left(&balance, 9),
+                row.icon()
+            )),
+            LabelStyle::Account => out.push_str(&format!(
+                "{} {} {}\n",
+                account_cell(row),
+                pad_left(&balance, 9),
+                row.icon()
+            )),
+        }
     }
     out.push_str(FENCE);
     out.push('\n');
@@ -136,6 +208,12 @@ pub fn whatsapp_status(rows: &[StatusRow], synced: &str) -> String {
 /// so the reply can say how many were checked and how many could not be read.
 #[must_use]
 pub fn whatsapp_low(rows: &[StatusRow], synced: &str) -> String {
+    whatsapp_low_styled(rows, synced, LabelStyle::Name)
+}
+
+/// Like [`whatsapp_low`] with a chosen [`LabelStyle`].
+#[must_use]
+pub fn whatsapp_low_styled(rows: &[StatusRow], synced: &str, style: LabelStyle) -> String {
     let mut low: Vec<&StatusRow> = rows.iter().filter(|r| r.is_low()).collect();
     low.sort_by(|a, b| {
         a.balance
@@ -163,24 +241,39 @@ pub fn whatsapp_low(rows: &[StatusRow], synced: &str) -> String {
             low.len(),
             rows.len()
         );
-        text.push_str(&format!(
-            "{} {} {} {}\n",
-            pad_right("Unit", 9),
-            pad_right("Acc#", 5),
-            pad_left("Balance", 9),
-            pad_left("Alert", 5)
-        ));
+        match style {
+            LabelStyle::Name => text.push_str(&format!(
+                "{} {} {} {}\n",
+                pad_right("Unit", 9),
+                pad_right("Acc#", 5),
+                pad_left("Balance", 9),
+                pad_left("Alert", 5)
+            )),
+            LabelStyle::Account => text.push_str(&format!(
+                "{} {} {}\n",
+                pad_right("Account (Unit)", ACCOUNT_CELL),
+                pad_left("Balance", 9),
+                pad_left("Alert", 5)
+            )),
+        }
         for row in &low {
             let balance = row
                 .balance
                 .map_or_else(|| "n/a".to_string(), |b| Bdt(b).to_string());
-            text.push_str(&format!(
-                "{} {} {} {}\n",
-                pad_right(&row.label, 9),
-                pad_right(&tail3(&row.number), 5),
-                pad_left(&balance, 9),
-                pad_left(&format!("{:.0}", row.threshold), 5)
-            ));
+            let alert = pad_left(&format!("{:.0}", row.threshold), 5);
+            match style {
+                LabelStyle::Name => text.push_str(&format!(
+                    "{} {} {} {alert}\n",
+                    pad_right(&row.label, 9),
+                    pad_right(&tail3(&row.number), 5),
+                    pad_left(&balance, 9)
+                )),
+                LabelStyle::Account => text.push_str(&format!(
+                    "{} {} {alert}\n",
+                    account_cell(row),
+                    pad_left(&balance, 9)
+                )),
+            }
         }
         text.push_str(FENCE);
         text
@@ -280,19 +373,53 @@ pub struct CardData<'a> {
     pub threshold: f64,
     pub balance: &'a Balance,
     pub info: Option<&'a CustomerInfo>,
+    /// Realtime reading, when one was asked for.
+    pub realtime: Option<&'a Realtime>,
 }
 
 /// Rich per-meter card for last-3-digit and unit-name lookups.
 #[must_use]
 pub fn whatsapp_card(card: &CardData<'_>, show_pii: bool) -> String {
     let b = card.balance;
-    let low = b.balance < card.threshold;
-    let icon = if low { ICON_LOW } else { ICON_OK };
+    // A fresh realtime reading beats the daily snapshot for the red/green decision.
+    let effective = match card.realtime {
+        Some(Realtime::Fresh { balance, .. }) => *balance,
+        _ => b.balance,
+    };
+    let icon = if effective < card.threshold {
+        ICON_LOW
+    } else {
+        ICON_OK
+    };
     let mut out = format!(
-        "🔌 *{} — METER DETAILS*\n{RULE}\n{icon} *Balance:* *{} BDT*\n",
-        card.unit_name.to_uppercase(),
-        Bdt(b.balance)
+        "🔌 *{} — METER DETAILS*\n{RULE}\n",
+        card.unit_name.to_uppercase()
     );
+    match card.realtime {
+        Some(Realtime::Fresh {
+            balance,
+            received_at,
+        }) => out.push_str(&format!(
+            "{icon} *Realtime balance:* *{} BDT*\n⚡ _Read from the meter at {}_\n📅 *Daily snapshot:* {} BDT\n",
+            Bdt(*balance),
+            clock::rfc3339_to_dhaka(received_at),
+            Bdt(b.balance)
+        )),
+        Some(Realtime::Unavailable { reason, last }) => {
+            out.push_str(&format!(
+                "{icon} *Balance:* *{} BDT* (daily snapshot)\n⏳ _A live meter reading was not possible this time: {reason}. The daily snapshot is shown instead._\n",
+                Bdt(b.balance)
+            ));
+            if let Some((balance, at)) = last {
+                out.push_str(&format!(
+                    "⚡ *Last realtime:* {} BDT ({})\n",
+                    Bdt(*balance),
+                    clock::rfc3339_to_dhaka(at)
+                ));
+            }
+        }
+        None => out.push_str(&format!("{icon} *Balance:* *{} BDT*\n", Bdt(b.balance))),
+    }
     if let Some(usage) = b.month_consumption {
         out.push_str(&format!("📉 *Month Usage:* {} BDT\n", Bdt(usage)));
     }
@@ -478,7 +605,8 @@ pub fn monthly_table(months: &[MonthUsage]) -> String {
         .map(|m| {
             vec![
                 m.month.clone(),
-                format!("{:.2}", m.units_kwh),
+                m.units_kwh
+                    .map_or_else(|| "-".to_string(), |u| format!("{u:.2}")),
                 Bdt(m.taka).to_string(),
                 m.max_demand
                     .map_or_else(|| "-".to_string(), |d| format!("{d:.3}")),
@@ -584,6 +712,7 @@ mod tests {
             threshold: 150.0,
             balance: &b,
             info: Some(&info),
+            realtime: None,
         };
         let public = whatsapp_card(&card, false);
         assert!(public.contains("1,384.35 BDT"));
@@ -702,5 +831,64 @@ mod unreadable_tests {
         assert!(outage_notice(reason).contains(reason));
         assert!(unreadable_message(reason, "2026-11-07 10:00").contains(reason));
         assert!(recovery_notice().contains("back"));
+    }
+}
+
+#[cfg(test)]
+mod label_style_tests {
+    use super::*;
+
+    fn row(label: &str, number: &str, balance: Option<f64>) -> StatusRow {
+        StatusRow {
+            label: label.to_string(),
+            number: number.to_string(),
+            balance,
+            threshold: 150.0,
+        }
+    }
+
+    #[test]
+    fn titled_puts_the_account_first_and_the_name_in_brackets() {
+        assert_eq!(
+            titled(LabelStyle::Account, "41167724", "Mother Meter"),
+            "41167724 (Mother Meter)"
+        );
+        assert_eq!(
+            titled(LabelStyle::Name, "41167724", "Mother Meter"),
+            "Mother Meter"
+        );
+        assert_eq!(titled(LabelStyle::Account, "", "Lift"), "Lift");
+    }
+
+    #[test]
+    fn style_names_parse() {
+        assert_eq!(LabelStyle::parse("Account"), Some(LabelStyle::Account));
+        assert_eq!(LabelStyle::parse(" name "), Some(LabelStyle::Name));
+        assert_eq!(LabelStyle::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn account_tables_show_account_then_bracketed_name_and_fit_a_phone() {
+        let rows = vec![
+            row("Mother Meter", "41167724", Some(1384.35)),
+            row("M825", "41167730", Some(94.83)),
+            row("A very long unit name 🔥", "33007597", None),
+            row("Pump", "", Some(200.0)),
+        ];
+        assert!(
+            whatsapp_status_styled(&rows, "now", LabelStyle::Account).contains("41167724 (Mother)")
+        );
+        for text in [
+            whatsapp_status_styled(&rows, "now", LabelStyle::Account),
+            whatsapp_low_styled(&rows, "now", LabelStyle::Account),
+        ] {
+            assert!(text.contains("41167730 (M825)"), "{text}");
+            for line in text
+                .lines()
+                .filter(|l| !l.starts_with(['⚡', '🔴', '🕒', '💡', '⚪']))
+            {
+                assert!(display_width(line) <= MAX_LINE_WIDTH, "too wide: '{line}'");
+            }
+        }
     }
 }

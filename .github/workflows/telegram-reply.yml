@@ -42,6 +42,8 @@ jobs:
           CHAT_ID: ${{ inputs.chat_id }}
           TEXT: ${{ inputs.text }}
           DESCO_METERS_JSON: ${{ secrets.DESCO_METERS_JSON }}
+          DESCO_USERNAME: ${{ secrets.DESCO_USERNAME }}
+          DESCO_PASSWORD: ${{ secrets.DESCO_PASSWORD }}
           DEFAULT_THRESHOLD_BDT: ${{ vars.DEFAULT_THRESHOLD_BDT || '150' }}
           ON_DEMAND_DELAY_MS: "200"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

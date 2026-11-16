@@ -74,7 +74,7 @@ test("a missing server-side secret never lets anything through", async () => {
 });
 
 test("misconfiguration is reported by name, only after the caller is authenticated", async () => {
-  const badToken = { ...env, TELEGRAM_BOT_TOKEN: "8776351611" };
+  const badToken = { ...env, TELEGRAM_BOT_TOKEN: "123456789" };
   const response = await worker.fetch(telegramUpdate(111, "status"), badToken, ctx);
   assert.equal(response.status, 500);
   assert.match(await response.text(), /TELEGRAM_BOT_TOKEN/);

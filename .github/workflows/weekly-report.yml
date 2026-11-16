@@ -25,6 +25,8 @@ jobs:
       - name: Send report
         env:
           DESCO_METERS_JSON: ${{ secrets.DESCO_METERS_JSON }}
+          DESCO_USERNAME: ${{ secrets.DESCO_USERNAME }}
+          DESCO_PASSWORD: ${{ secrets.DESCO_PASSWORD }}
           NOTIFY_PROVIDER: ${{ vars.NOTIFY_PROVIDER || 'console' }}
           DEFAULT_THRESHOLD_BDT: ${{ vars.DEFAULT_THRESHOLD_BDT || '150' }}
           RATE_LIMIT_MS: ${{ vars.RATE_LIMIT_MS || '1000' }}

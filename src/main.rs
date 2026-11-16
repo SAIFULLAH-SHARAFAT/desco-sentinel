@@ -14,7 +14,7 @@ use desco_sentinel::config::{Env, Settings, load_meters};
 use desco_sentinel::desco_api::{Balance, DescoClient};
 use desco_sentinel::domain::Identifier;
 use desco_sentinel::formatter::{
-    StatusRow, ascii_table, monthly_table, recharge_table, whatsapp_status,
+    StatusRow, ascii_table, monthly_table, recharge_table, whatsapp_status_styled,
 };
 use desco_sentinel::monitor::Monitor;
 use desco_sentinel::notifier::Notifier;
@@ -97,6 +97,10 @@ fn build_monitor(cli: &Cli, env: &Env) -> Result<Monitor> {
         settings.retries,
         settings.insecure_tls,
     )?;
+    let api = match settings.credentials.clone() {
+        Some(credentials) => api.with_credentials(credentials)?,
+        None => api,
+    };
     Ok(Monitor::new(api, meters, settings))
 }
 
@@ -248,7 +252,11 @@ fn print_status(monitor: &Monitor) {
     println!("\nWhatsApp preview:\n");
     println!(
         "{}",
-        whatsapp_status(&preview_rows, &clock::format_minute(clock::dhaka_now()))
+        whatsapp_status_styled(
+            &preview_rows,
+            &clock::format_minute(clock::dhaka_now()),
+            monitor.settings().label_style
+        )
     );
 }
 

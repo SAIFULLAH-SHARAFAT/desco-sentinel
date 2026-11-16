@@ -208,3 +208,25 @@ fn example_config_has_20_valid_meters() {
             .any(|m| (m.threshold.0 - 500.0).abs() < f64::EPSILON)
     );
 }
+
+#[test]
+fn monthly_readings_flagged_as_excluded_become_none_not_zero() {
+    let body: serde_json::Value = serde_json::from_str(
+        r#"[
+          {"month":"2026-06","consumedTaka":805.47,"maximumDemand":0.428,"consumedUnitExcluded":false},
+          {"month":"2026-08","consumedUnit":206.25,"consumedTaka":1513.88,"maximumDemand":0.0,"maximumDemandExcluded":true},
+          {"month":"2026-09","consumedUnit":0.0,"consumedUnitExcluded":true,"consumedTaka":10.0}
+        ]"#,
+    )
+    .expect("json");
+    let months = parse_monthly(&body).expect("list");
+    assert_eq!(months[0].month, "2026-09");
+    assert_eq!(
+        months[0].units_kwh, None,
+        "excluded unit is not a real zero"
+    );
+    assert_eq!(months[1].units_kwh, Some(206.25));
+    assert_eq!(months[1].max_demand, None);
+    assert_eq!(months[2].units_kwh, None, "missing unit is not zero");
+    assert_eq!(months[2].max_demand, Some(0.428));
+}
